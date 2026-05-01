@@ -1,0 +1,16 @@
+# Normalize all text files to LF in the repo, auto-convert on checkout
+* text=auto eol=lf
+
+# Force binary files to stay untouched
+*.png binary
+*.jpg binary
+*.ico binary
+*.woff binary
+*.woff2 binary
+*.pdf binary
+*.zip binary
+*.exe binary
+
+# Keep Windows scripts compatible
+*.bat text eol=crlf
+*.cmd text eol=crlf
