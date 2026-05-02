@@ -13,6 +13,8 @@ import importlib
 
 from fastapi import FastAPI
 
+from app.core.config import get_settings
+
 MODULE_REGISTRY: tuple[tuple[str, str], ...] = (
     ("auth", "/auth"),
     ("users", "/users"),
@@ -34,6 +36,8 @@ def register_modules(application: FastAPI) -> None:
         )
         application.include_router(routes_module.router, prefix=url_prefix)
 
+
+get_settings()  # FR-010 / R5: fail fast if JWT_SECRET_KEY (or other required vars) is missing.
 
 app = FastAPI(title="Progress Tracker Backend")
 register_modules(app)
