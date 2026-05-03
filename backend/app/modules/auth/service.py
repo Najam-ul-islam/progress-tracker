@@ -64,6 +64,10 @@ def authenticate_user(session: Session, *, email: str, password: str) -> User:
         # Single error for both cases — no user-enumeration leak (FR-007 / SC-005).
         logger.info("auth.authenticate_user: failure email=%s", email)
         raise InvalidCredentialsError()
+    if not user.is_active:
+        # FR-013: deactivated users cannot log in. Same exception → byte-identical 401.
+        logger.info("auth.authenticate_user: inactive user email=%s", email)
+        raise InvalidCredentialsError()
     return user
 
 

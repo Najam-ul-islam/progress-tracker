@@ -1,0 +1,294 @@
+openapi: 3.1.0
+info:
+  title: Progress Tracker — Users Management
+  version: "0.3.0"
+  description: |
+    HTTP contract for feature 003-users-management. All endpoints are mounted
+    under the `/users` prefix by `app.main.register_modules`. All endpoints
+    require a valid bearer token; unauthenticated requests return 401 with
+    the body emitted by `auth.dependencies.get_current_user`.
+
+servers:
+  - url: http://localhost:8000
+    description: Local dev (uv run uvicorn app.main:app --reload)
+
+tags:
+  - name: users
+    description: User profile management and role/status writes.
+
+security:
+  - bearerAuth: []
+
+paths:
+  /users/me:
+    get:
+      tags: [users]
+      summary: Read the authenticated user's own profile.
+      description: |
+        Any authenticated role (admin/manager/developer) may call this endpoint.
+        Returns the requester's own `UserRead` record.
+      operationId: get_my_profile
+      responses:
+        "200":
+          description: Profile of the authenticated user.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/UserRead" }
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+
+  /users:
+    get:
+      tags: [users]
+      summary: List all users.
+      description: |
+        Admins and managers only. Developers receive 403. MVP returns the
+        full list as an unwrapped JSON array; pagination is deferred.
+      operationId: list_users
+      responses:
+        "200":
+          description: List of users.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/UserListResponse" }
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+
+  /users/developers:
+    get:
+      tags: [users]
+      summary: List active developers.
+      description: |
+        Admins and managers only. Returns every user with
+        `role=="developer" AND is_active==true`.
+      operationId: list_developers
+      responses:
+        "200":
+          description: List of active developers.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/UserListResponse" }
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+
+  /users/{id}:
+    get:
+      tags: [users]
+      summary: Read one user by id.
+      description: |
+        Admins and managers may read any user. Developers may read only
+        themselves; any other id returns 403 (not 404, to avoid id-probing).
+      operationId: get_user_by_id
+      parameters:
+        - $ref: "#/components/parameters/UserId"
+      responses:
+        "200":
+          description: User record.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/UserRead" }
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+
+    patch:
+      tags: [users]
+      summary: Update a user's profile and/or role and/or active flag.
+      description: |
+        Admin only. Accepts any non-empty subset of `{name, role, is_active}`.
+        An empty body or a body with all-null fields returns 422 (FR-011).
+        `email` and `password_hash` cannot be modified through this endpoint
+        — including them returns 422 (FR-012). The last-admin guard (FR-014)
+        applies if the patch would demote or deactivate the last remaining
+        active admin.
+      operationId: update_user
+      parameters:
+        - $ref: "#/components/parameters/UserId"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/UserUpdate" }
+      responses:
+        "200":
+          description: Updated user record.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/UserRead" }
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "409":
+          $ref: "#/components/responses/Conflict"
+        "422":
+          $ref: "#/components/responses/UnprocessableEntity"
+
+  /users/{id}/status:
+    patch:
+      tags: [users]
+      summary: Activate or deactivate a user.
+      description: |
+        Admin only. Flips `is_active` and bumps `updated_at`. An admin
+        cannot deactivate themselves if they are the last remaining active
+        admin (FR-014); attempting to do so returns 409.
+      operationId: change_user_status
+      parameters:
+        - $ref: "#/components/parameters/UserId"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/UserStatusUpdate" }
+      responses:
+        "200":
+          description: Updated user record.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/UserRead" }
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "409":
+          $ref: "#/components/responses/Conflict"
+        "422":
+          $ref: "#/components/responses/UnprocessableEntity"
+
+components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+      description: HS256 JWT minted by POST /auth/login (feature 002).
+
+  parameters:
+    UserId:
+      name: id
+      in: path
+      required: true
+      description: Surrogate primary key of the user.
+      schema:
+        type: integer
+        format: int64
+        minimum: 1
+
+  responses:
+    Unauthorized:
+      description: |
+        Missing, invalid, expired, or wrong-secret bearer token. Body
+        format is identical to feature 002's `get_current_user` 401 body.
+      content:
+        application/json:
+          schema: { $ref: "#/components/schemas/AuthError" }
+          example: { detail: "Could not validate credentials" }
+
+    Forbidden:
+      description: |
+        Caller is authenticated but their role is not allowed. Generic body;
+        no role-specific information leaked.
+      content:
+        application/json:
+          schema: { $ref: "#/components/schemas/AuthError" }
+          example: { detail: "Forbidden" }
+
+    NotFound:
+      description: User id does not exist (FR-019).
+      content:
+        application/json:
+          schema: { $ref: "#/components/schemas/AuthError" }
+          example: { detail: "User not found" }
+
+    Conflict:
+      description: |
+        Last-admin invariant (FR-014) or self-deactivation guard would be
+        violated by this write. The row is unchanged.
+      content:
+        application/json:
+          schema: { $ref: "#/components/schemas/AuthError" }
+          examples:
+            last-admin-demote:
+              value: { detail: "cannot demote the last remaining admin" }
+            last-admin-deactivate:
+              value: { detail: "cannot deactivate the last remaining admin" }
+            self-deactivate:
+              value: { detail: "cannot deactivate yourself" }
+
+    UnprocessableEntity:
+      description: |
+        Pydantic validation failed: empty patch (FR-011), forbidden field
+        like `email`/`password` (FR-012), or invalid role enum (FR-018).
+      content:
+        application/json:
+          schema:
+            type: object
+            properties:
+              detail:
+                type: array
+                items:
+                  type: object
+
+  schemas:
+    UserRole:
+      type: string
+      enum: [admin, manager, developer]
+
+    UserRead:
+      type: object
+      additionalProperties: false
+      required: [id, name, email, role, is_active, created_at, updated_at]
+      properties:
+        id:        { type: integer, format: int64, minimum: 1 }
+        name:      { type: string,  minLength: 1, maxLength: 120 }
+        email:     { type: string,  format: email, maxLength: 320 }
+        role:      { $ref: "#/components/schemas/UserRole" }
+        is_active: { type: boolean }
+        created_at:{ type: string, format: date-time }
+        updated_at:{ type: string, format: date-time }
+      # NB: no password_hash. FR-017, SC-006.
+
+    UserUpdate:
+      type: object
+      additionalProperties: false
+      description: |
+        At least one of name/role/is_active MUST be provided. An empty body
+        or an all-null body returns 422 (FR-011). `email` and `password_hash`
+        are intentionally NOT in this schema; including them returns 422
+        because additionalProperties is false (FR-012).
+      properties:
+        name:      { type: string, minLength: 1, maxLength: 120, nullable: true }
+        role:      { $ref: "#/components/schemas/UserRole", nullable: true }
+        is_active: { type: boolean, nullable: true }
+
+    UserStatusUpdate:
+      type: object
+      additionalProperties: false
+      required: [is_active]
+      properties:
+        is_active: { type: boolean }
+
+    UserListResponse:
+      type: array
+      items: { $ref: "#/components/schemas/UserRead" }
+
+    AuthError:
+      type: object
+      additionalProperties: false
+      required: [detail]
+      properties:
+        detail:
+          oneOf:
+            - { type: string }
+            - { type: array, items: { type: object } }

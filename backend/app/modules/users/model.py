@@ -42,7 +42,12 @@ class User(SQLModel, table=True):
     # Note: UserRole literal contract is enforced at the schema layer (UserCreate)
     # and at the DB layer (CheckConstraint above). Stored as `str` because SQLModel
     # cannot introspect typing.Literal annotations into a SQLAlchemy column type.
+    is_active: bool = Field(default=True, nullable=False)
     created_at: datetime = Field(
+        default_factory=lambda: datetime.now(timezone.utc),
+        nullable=False,
+    )
+    updated_at: datetime = Field(
         default_factory=lambda: datetime.now(timezone.utc),
         nullable=False,
     )

@@ -83,3 +83,63 @@ def seed_user_fixture(session):
         )
 
     return _make
+
+
+@pytest.fixture(name="seed_admin")
+def seed_admin_fixture(seed_user):
+    def _make(
+        *,
+        name: str = "Ada Admin",
+        email: str = "admin@example.com",
+        password: str = "correct-horse",
+    ) -> User:
+        return seed_user(name=name, email=email, password=password, role="admin")
+
+    return _make
+
+
+@pytest.fixture(name="seed_manager")
+def seed_manager_fixture(seed_user):
+    def _make(
+        *,
+        name: str = "Mia Manager",
+        email: str = "manager@example.com",
+        password: str = "correct-horse",
+    ) -> User:
+        return seed_user(name=name, email=email, password=password, role="manager")
+
+    return _make
+
+
+@pytest.fixture(name="seed_developer")
+def seed_developer_fixture(seed_user):
+    def _make(
+        *,
+        name: str = "Dev One",
+        email: str = "dev@example.com",
+        password: str = "correct-horse",
+    ) -> User:
+        return seed_user(name=name, email=email, password=password, role="developer")
+
+    return _make
+
+
+@pytest.fixture(name="make_token")
+def make_token_fixture():
+    from app.core.security import create_access_token
+
+    def _make(user: User) -> str:
+        assert user.id is not None
+        return create_access_token(
+            user_id=user.id, email=user.email, role=user.role
+        )
+
+    return _make
+
+
+@pytest.fixture(name="auth_header")
+def auth_header_fixture(make_token):
+    def _make(user: User) -> dict[str, str]:
+        return {"Authorization": f"Bearer {make_token(user)}"}
+
+    return _make
