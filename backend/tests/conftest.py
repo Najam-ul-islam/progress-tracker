@@ -28,7 +28,7 @@ from app.db.session import get_session
 from app.main import app
 
 # Import every module's model so SQLModel.metadata.create_all picks them up.
-# Today only the User model exists; future modules append imports here.
+from app.modules.clients.model import Client  # noqa: F401
 from app.modules.users.model import User  # noqa: F401
 
 
