@@ -29,12 +29,21 @@ MODULE_REGISTRY: tuple[tuple[str, str], ...] = (
 
 
 def register_modules(application: FastAPI) -> None:
-    """Import each module's routes and include its router under its prefix."""
+    """Import each module's routes and include its router under its prefix.
+
+    The projects module additionally exposes a `modules_router` mounted at
+    `/modules` because each `MODULE_REGISTRY` entry maps to a single prefix
+    (see `specs/005-projects/plan.md` §"Routing note").
+    """
     for package_name, url_prefix in MODULE_REGISTRY:
         routes_module = importlib.import_module(
             f"app.modules.{package_name}.routes"
         )
         application.include_router(routes_module.router, prefix=url_prefix)
+        if package_name == "projects":
+            application.include_router(
+                routes_module.modules_router, prefix="/modules"
+            )
 
 
 get_settings()  # FR-010 / R5: fail fast if JWT_SECRET_KEY (or other required vars) is missing.
