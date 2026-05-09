@@ -1,0 +1,363 @@
+openapi: 3.1.0
+info:
+  title: Progress Tracker — Reporting API
+  version: "0.1.0"
+  description: |
+    Read-only analytics endpoints over existing project, payment, and user
+    data. No new database tables. Five endpoints under `/reports`. RBAC:
+    admin → full; manager → all reports except `/developers/me`;
+    developer → `/developers/me` only.
+
+    Guard ordering on every route: 401 → 403 → 404 → 422.
+
+servers:
+  - url: http://localhost:8000
+
+security:
+  - bearerAuth: []
+
+paths:
+  /reports/dashboard:
+    get:
+      operationId: getDashboardSummary
+      summary: Live dashboard — project counts, developer engagement, payment flow
+      tags: [reports]
+      responses:
+        "200":
+          description: Composite summary (always returns a structurally valid payload, even on empty system).
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/DashboardSummary"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+
+  /reports/projects:
+    get:
+      operationId: getProjectsReport
+      summary: Per-project progress, modules, and assigned developers
+      tags: [reports]
+      parameters:
+        - $ref: "#/components/parameters/DateFrom"
+        - $ref: "#/components/parameters/DateTo"
+        - $ref: "#/components/parameters/ProjectStatus"
+        - $ref: "#/components/parameters/ClientId"
+        - $ref: "#/components/parameters/DeveloperId"
+      responses:
+        "200":
+          description: Project rows (empty list when filters match nothing).
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/ProjectReportRow"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "422":
+          $ref: "#/components/responses/InvalidFilter"
+
+  /reports/developers:
+    get:
+      operationId: getDevelopersReport
+      summary: Per-developer modules and earnings
+      tags: [reports]
+      parameters:
+        - $ref: "#/components/parameters/DateFrom"
+        - $ref: "#/components/parameters/DateTo"
+        - $ref: "#/components/parameters/ProjectStatus"
+        - $ref: "#/components/parameters/ClientId"
+        - $ref: "#/components/parameters/DeveloperId"
+      responses:
+        "200":
+          description: Developer rows (empty list when filters match nothing).
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/DeveloperReportRow"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "422":
+          $ref: "#/components/responses/InvalidFilter"
+
+  /reports/payments:
+    get:
+      operationId: getFinancialReport
+      summary: Per-project profitability with overall totals
+      tags: [reports]
+      parameters:
+        - $ref: "#/components/parameters/DateFrom"
+        - $ref: "#/components/parameters/DateTo"
+        - $ref: "#/components/parameters/ProjectStatus"
+        - $ref: "#/components/parameters/ClientId"
+      responses:
+        "200":
+          description: Per-project rows plus totals.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/FinancialReportResponse"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "422":
+          $ref: "#/components/responses/InvalidFilter"
+
+  /reports/developers/me:
+    get:
+      operationId: getDeveloperSelfReport
+      summary: Self-service stats for the calling developer
+      tags: [reports]
+      responses:
+        "200":
+          description: One DeveloperSelfReport object scoped to the caller.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/DeveloperSelfReport"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+
+components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+
+  parameters:
+    DateFrom:
+      name: date_from
+      in: query
+      required: false
+      schema: { type: string, format: date }
+      description: ISO date (YYYY-MM-DD); inclusive lower bound on `created_at`.
+    DateTo:
+      name: date_to
+      in: query
+      required: false
+      schema: { type: string, format: date }
+      description: ISO date (YYYY-MM-DD); inclusive upper bound on `created_at`. Must be ≥ date_from.
+    ProjectStatus:
+      name: project_status
+      in: query
+      required: false
+      schema:
+        type: string
+        enum: [pending, active, completed]
+    ClientId:
+      name: client_id
+      in: query
+      required: false
+      schema: { type: integer, minimum: 1 }
+      description: Restrict to projects/payments belonging to this client.
+    DeveloperId:
+      name: developer_id
+      in: query
+      required: false
+      schema: { type: integer, minimum: 1 }
+      description: Restrict to projects/payments touching this developer.
+
+  responses:
+    Unauthorized:
+      description: Missing or invalid bearer token.
+    Forbidden:
+      description: Authenticated, but role does not have access to this endpoint.
+    InvalidFilter:
+      description: A filter value failed validation (bad date range, unknown status, missing FK).
+
+  schemas:
+    DashboardSummary:
+      type: object
+      required: [projects, developers, payments]
+      additionalProperties: false
+      properties:
+        projects:
+          type: object
+          required: [total, pending, active, completed, overdue]
+          additionalProperties: false
+          properties:
+            total:     { type: integer, minimum: 0 }
+            pending:   { type: integer, minimum: 0 }
+            active:    { type: integer, minimum: 0 }
+            completed: { type: integer, minimum: 0 }
+            overdue:   { type: integer, minimum: 0 }
+        developers:
+          type: object
+          required: [total, with_active_assignments, average_module_progress]
+          additionalProperties: false
+          properties:
+            total:                    { type: integer, minimum: 0 }
+            with_active_assignments:  { type: integer, minimum: 0 }
+            average_module_progress:  { type: string, description: "Decimal string, 1 dp" }
+        payments:
+          type: object
+          required: [total_revenue, total_company_reserve, total_developer_disbursed, pending_amount]
+          additionalProperties: false
+          properties:
+            total_revenue:               { type: string }
+            total_company_reserve:       { type: string }
+            total_developer_disbursed:   { type: string }
+            pending_amount:              { type: string }
+
+    ProjectReportRow:
+      type: object
+      required:
+        [id, name, client_id, client_name, status, start_date, end_date,
+         overall_progress, module_count, modules_completed, modules_in_progress,
+         modules_pending, invoiced_amount, outstanding_amount, modules]
+      additionalProperties: false
+      properties:
+        id: { type: integer }
+        name: { type: string }
+        client_id: { type: integer }
+        client_name: { type: string }
+        status: { type: string, enum: [pending, active, completed] }
+        start_date: { type: string, format: date }
+        end_date: { type: string, format: date }
+        overall_progress: { type: integer, minimum: 0, maximum: 100 }
+        module_count: { type: integer, minimum: 0 }
+        modules_completed: { type: integer, minimum: 0 }
+        modules_in_progress: { type: integer, minimum: 0 }
+        modules_pending: { type: integer, minimum: 0 }
+        invoiced_amount: { type: string }
+        outstanding_amount: { type: string }
+        modules:
+          type: array
+          items: { $ref: "#/components/schemas/ProjectReportModule" }
+
+    ProjectReportModule:
+      type: object
+      required: [id, name, assigned_developer_id, assigned_developer_name, progress, status, share_percentage]
+      additionalProperties: false
+      properties:
+        id: { type: integer }
+        name: { type: string }
+        assigned_developer_id: { type: integer }
+        assigned_developer_name: { type: string }
+        progress: { type: integer, minimum: 0, maximum: 100 }
+        status: { type: string, enum: [pending, in_progress, completed] }
+        share_percentage: { type: string }
+
+    DeveloperReportRow:
+      type: object
+      required:
+        [id, name, email, module_count, modules_completed, modules_in_progress,
+         modules_pending, earnings, earnings_by_project]
+      additionalProperties: false
+      properties:
+        id: { type: integer }
+        name: { type: string }
+        email: { type: string, format: email }
+        module_count: { type: integer, minimum: 0 }
+        modules_completed: { type: integer, minimum: 0 }
+        modules_in_progress: { type: integer, minimum: 0 }
+        modules_pending: { type: integer, minimum: 0 }
+        earnings: { $ref: "#/components/schemas/EarningsBlock" }
+        earnings_by_project:
+          type: array
+          items: { $ref: "#/components/schemas/EarningsByProject" }
+
+    EarningsBlock:
+      type: object
+      required: [paid, pending, total]
+      additionalProperties: false
+      properties:
+        paid: { type: string }
+        pending: { type: string }
+        total: { type: string }
+
+    EarningsByProject:
+      type: object
+      required: [project_id, project_name, paid, pending, total]
+      additionalProperties: false
+      properties:
+        project_id: { type: integer }
+        project_name: { type: string }
+        paid: { type: string }
+        pending: { type: string }
+        total: { type: string }
+
+    FinancialReportResponse:
+      type: object
+      required: [rows, totals]
+      additionalProperties: false
+      properties:
+        rows:
+          type: array
+          items: { $ref: "#/components/schemas/FinancialReportRow" }
+        totals: { $ref: "#/components/schemas/FinancialTotals" }
+
+    FinancialReportRow:
+      type: object
+      required:
+        [project_id, project_name, client_id, client_name, status,
+         invoiced, company_share, developer_share, outstanding, payment_count]
+      additionalProperties: false
+      properties:
+        project_id: { type: integer }
+        project_name: { type: string }
+        client_id: { type: integer }
+        client_name: { type: string }
+        status: { type: string, enum: [pending, active, completed] }
+        invoiced: { type: string }
+        company_share: { type: string }
+        developer_share: { type: string }
+        outstanding: { type: string }
+        payment_count: { type: integer, minimum: 0 }
+
+    FinancialTotals:
+      type: object
+      required: [invoiced, company_share, developer_share, outstanding]
+      additionalProperties: false
+      properties:
+        invoiced: { type: string }
+        company_share: { type: string }
+        developer_share: { type: string }
+        outstanding: { type: string }
+
+    DeveloperSelfReport:
+      type: object
+      required:
+        [id, name, module_count, modules_completed, modules_in_progress,
+         modules_pending, earnings, modules]
+      additionalProperties: false
+      properties:
+        id: { type: integer }
+        name: { type: string }
+        module_count: { type: integer, minimum: 0 }
+        modules_completed: { type: integer, minimum: 0 }
+        modules_in_progress: { type: integer, minimum: 0 }
+        modules_pending: { type: integer, minimum: 0 }
+        earnings: { $ref: "#/components/schemas/EarningsBlock" }
+        modules:
+          type: array
+          items: { $ref: "#/components/schemas/DeveloperSelfModule" }
+
+    DeveloperSelfModule:
+      type: object
+      required:
+        [module_id, module_name, project_id, project_name, progress, status,
+         share_percentage, amount_paid, amount_pending]
+      additionalProperties: false
+      properties:
+        module_id: { type: integer }
+        module_name: { type: string }
+        project_id: { type: integer }
+        project_name: { type: string }
+        progress: { type: integer, minimum: 0, maximum: 100 }
+        status: { type: string, enum: [pending, in_progress, completed] }
+        share_percentage: { type: string }
+        amount_paid: { type: string }
+        amount_pending: { type: string }
