@@ -23,7 +23,7 @@ MODULE_REGISTRY: tuple[tuple[str, str], ...] = (
     ("modules_tasks", "/modules-tasks"),
     ("developers", "/developers"),
     ("payments", "/payments"),
-    ("reporting", "/reporting"),
+    ("reporting", "/reports"),
     ("notifications", "/notifications"),
 )
 
