@@ -1,0 +1,392 @@
+openapi: 3.0.3
+info:
+  title: Progress Tracker — Payments Distribution
+  version: "1.0.0"
+  description: |
+    HTTP contract for the `payments` module (feature 006).
+
+    All money fields are JSON strings (Decimal-as-string, R10).
+    All endpoints require `Authorization: Bearer <jwt>`.
+    Guard order on every endpoint: 401 → 403 → 404 → 422 (FR-016).
+
+servers:
+  - url: http://localhost:8000
+
+security:
+  - bearerAuth: []
+
+components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+
+  schemas:
+    PaymentGenerateRequest:
+      type: object
+      additionalProperties: false
+      required: [total_amount]
+      properties:
+        total_amount:
+          type: string
+          description: Decimal at 2 dp, > 0.
+          example: "10000.00"
+
+    PaymentRead:
+      type: object
+      required: [id, project_id, total_amount, company_amount, developer_amount, status, created_at]
+      properties:
+        id:
+          type: integer
+        project_id:
+          type: integer
+        total_amount:
+          type: string
+          example: "10000.00"
+        company_amount:
+          type: string
+          example: "3000.00"
+        developer_amount:
+          type: string
+          example: "7000.00"
+        status:
+          type: string
+          enum: [pending, partial, paid]
+        created_at:
+          type: string
+          format: date-time
+
+    DeveloperPaymentRead:
+      type: object
+      required: [id, payment_id, developer_id, module_id, share_percentage, amount, status, created_at]
+      properties:
+        id:
+          type: integer
+        payment_id:
+          type: integer
+        developer_id:
+          type: integer
+        module_id:
+          type: integer
+        share_percentage:
+          type: string
+          example: "40.00"
+        amount:
+          type: string
+          example: "4000.00"
+        status:
+          type: string
+          enum: [pending, paid]
+        created_at:
+          type: string
+          format: date-time
+
+    DeveloperPaymentMineRead:
+      allOf:
+        - $ref: '#/components/schemas/DeveloperPaymentRead'
+        - type: object
+          required: [project_id]
+          properties:
+            project_id:
+              type: integer
+              description: Denormalised for navigation in the developer view.
+
+    PaymentDetailRead:
+      allOf:
+        - $ref: '#/components/schemas/PaymentRead'
+        - type: object
+          required: [developer_breakdown]
+          properties:
+            developer_breakdown:
+              type: array
+              items:
+                $ref: '#/components/schemas/DeveloperPaymentRead'
+
+    PaymentStatusPatch:
+      type: object
+      additionalProperties: false
+      description: |
+        Mutually exclusive: provide EITHER `developer_payment_id` OR `target`.
+        Body cannot be empty; cannot supply both.
+      properties:
+        developer_payment_id:
+          type: integer
+          description: Mark a single child of this Payment as paid.
+        target:
+          type: string
+          enum: [all]
+          description: Mark every still-pending child paid in one call.
+
+    PaymentSummaryRead:
+      type: object
+      required: [total_billed, total_company_reserve, total_developer_disbursed, by_status]
+      properties:
+        total_billed:
+          type: string
+          example: "150000.00"
+        total_company_reserve:
+          type: string
+          example: "45000.00"
+        total_developer_disbursed:
+          type: string
+          example: "105000.00"
+        by_status:
+          type: object
+          required: [pending, partial, paid]
+          properties:
+            pending:
+              $ref: '#/components/schemas/PaymentSummaryBucket'
+            partial:
+              $ref: '#/components/schemas/PaymentSummaryBucket'
+            paid:
+              $ref: '#/components/schemas/PaymentSummaryBucket'
+
+    PaymentSummaryBucket:
+      type: object
+      required: [count, sum]
+      properties:
+        count:
+          type: integer
+          example: 3
+        sum:
+          type: string
+          example: "75000.00"
+
+    HTTPError:
+      type: object
+      required: [detail]
+      properties:
+        detail:
+          type: string
+
+paths:
+  /payments/generate/{project_id}:
+    post:
+      summary: Generate a Payment for a project (US1, FR-001..005, FR-010, FR-018)
+      description: |
+        Creates one Payment + one DeveloperPayment per active module.
+        Atomic — partial state cannot be persisted.
+        RBAC: admin, manager.
+      parameters:
+        - in: path
+          name: project_id
+          required: true
+          schema:
+            type: integer
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/PaymentGenerateRequest'
+      responses:
+        '201':
+          description: Payment created.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PaymentDetailRead'
+        '401':
+          description: Missing or invalid token.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPError'
+        '403':
+          description: Caller is a developer.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPError'
+        '404':
+          description: Project not found or soft-deleted.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPError'
+        '422':
+          description: |
+            Project status is not active|completed (FR-001),
+            module shares no longer sum to 70.00 (FR-005),
+            payload validation failed,
+            or `total_amount` <= 0.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPError'
+
+  /payments:
+    get:
+      summary: List Payments (US2, FR-006)
+      description: |
+        Lists every Payment in stable id order. Optional `project_id`
+        filter. RBAC: admin, manager.
+      parameters:
+        - in: query
+          name: project_id
+          required: false
+          schema:
+            type: integer
+      responses:
+        '200':
+          description: Payment list (may be empty).
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/PaymentRead'
+        '401':
+          description: Missing or invalid token.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPError'
+        '403':
+          description: Caller is a developer.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPError'
+
+  /payments/{id}:
+    get:
+      summary: Read one Payment with breakdown (US2, FR-006)
+      description: RBAC, admin, manager. Developers MUST receive 403.
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema:
+            type: integer
+      responses:
+        '200':
+          description: Payment + developer_breakdown.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PaymentDetailRead'
+        '401':
+          description: Missing or invalid token.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPError'
+        '403':
+          description: Caller is a developer.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPError'
+        '404':
+          description: Payment id not found.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPError'
+
+  /payments/developer/me:
+    get:
+      summary: Developer self-service earnings (US3, FR-007, FR-008, FR-013, FR-014)
+      description: |
+        Returns every DeveloperPayment row whose `developer_id` matches
+        the authenticated caller. Stable `created_at` ascending order.
+        RBAC: developer only. Admin and manager MUST receive 403.
+      responses:
+        '200':
+          description: Developer's rows (may be empty).
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/DeveloperPaymentMineRead'
+        '401':
+          description: Missing or invalid token.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPError'
+        '403':
+          description: Caller is admin or manager.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPError'
+
+  /payments/{id}/status:
+    patch:
+      summary: Mark child(ren) paid (US4, FR-011, FR-012)
+      description: |
+        Flips one or more `DeveloperPayment.status` from `pending` to
+        `paid`, then re-derives `Payment.status`. RBAC: admin only.
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema:
+            type: integer
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/PaymentStatusPatch'
+      responses:
+        '200':
+          description: Payment after status derivation.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PaymentDetailRead'
+        '401':
+          description: Missing or invalid token.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPError'
+        '403':
+          description: Caller is manager or developer.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPError'
+        '404':
+          description: Payment id not found.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPError'
+        '422':
+          description: |
+            Empty body, both fields supplied, unknown field,
+            or `developer_payment_id` belongs to a different Payment.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPError'
+
+  /payments/summary:
+    get:
+      summary: Aggregate company/developer/by-status summary (US5, FR-020)
+      description: RBAC, admin, manager. Developers MUST receive 403.
+      responses:
+        '200':
+          description: Aggregated sums and counts.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PaymentSummaryRead'
+        '401':
+          description: Missing or invalid token.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPError'
+        '403':
+          description: Caller is a developer.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPError'
