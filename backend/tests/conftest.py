@@ -29,6 +29,7 @@ from app.main import app
 
 # Import every module's model so SQLModel.metadata.create_all picks them up.
 from app.modules.clients.model import Client  # noqa: F401
+from app.modules.payments.model import DeveloperPayment, Payment  # noqa: F401
 from app.modules.projects.model import Project, ProjectModule  # noqa: F401
 from app.modules.users.model import User  # noqa: F401
 
