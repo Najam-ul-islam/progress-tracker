@@ -1,0 +1,263 @@
+openapi: 3.1.0
+info:
+  title: Notifications API
+  version: 1.0.0
+  description: |
+    In-app notification feed, mark-read, admin broadcast, and admin deadline-scan.
+    All endpoints require Bearer JWT (auth feature 002). Cross-user PATCH/read
+    deliberately returns 404 (not 403) to avoid leaking notification existence
+    (FR-005).
+servers:
+  - url: /
+
+paths:
+  /notifications:
+    get:
+      summary: List the authenticated caller's notifications
+      operationId: list_notifications
+      tags: [notifications]
+      security: [{ bearerAuth: [] }]
+      parameters:
+        - in: query
+          name: limit
+          schema:
+            type: integer
+            minimum: 1
+            maximum: 200
+            default: 50
+        - in: query
+          name: offset
+          schema:
+            type: integer
+            minimum: 0
+            default: 0
+      responses:
+        "200":
+          description: The caller's feed, in created_at descending order.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/NotificationFeed"
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "422": { $ref: "#/components/responses/Unprocessable" }
+
+  /notifications/{notification_id}/read:
+    patch:
+      summary: Mark a notification as read (idempotent)
+      operationId: mark_notification_read
+      tags: [notifications]
+      security: [{ bearerAuth: [] }]
+      parameters:
+        - in: path
+          name: notification_id
+          required: true
+          schema: { type: integer, minimum: 1 }
+      responses:
+        "200":
+          description: |
+            Notification marked read. Idempotent: subsequent calls return the
+            original `read_at`.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/MarkReadResponse"
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404":
+          description: |
+            Notification does not exist OR belongs to another user. Conflated
+            deliberately to avoid leakage (FR-005).
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ErrorBody" }
+
+  /notifications/send:
+    post:
+      summary: Admin-only broadcast to one user, a role, or all users
+      operationId: send_broadcast
+      tags: [notifications]
+      security: [{ bearerAuth: [] }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/BroadcastRequest"
+      responses:
+        "201":
+          description: Fan-out succeeded — one row created per recipient.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/BroadcastResult" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "422": { $ref: "#/components/responses/Unprocessable" }
+
+  /notifications/scan-deadlines:
+    post:
+      summary: Admin-only scan that emits deadline notifications (idempotent per day)
+      operationId: scan_deadlines
+      tags: [notifications]
+      security: [{ bearerAuth: [] }]
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              properties:
+                lookahead_days:
+                  type: integer
+                  minimum: 0
+                  maximum: 30
+                  default: 3
+      responses:
+        "200":
+          description: Scan completed; counts per category.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ScanResult" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+
+components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+
+  schemas:
+    NotificationType:
+      type: string
+      enum: [assignment, payment, payment_paid, deadline, system]
+
+    NotificationRead:
+      type: object
+      additionalProperties: false
+      required: [id, title, message, type, is_read, read_at, created_at]
+      properties:
+        id: { type: integer, minimum: 1 }
+        title: { type: string, minLength: 1, maxLength: 120 }
+        message: { type: string, minLength: 1, maxLength: 2000 }
+        type: { $ref: "#/components/schemas/NotificationType" }
+        is_read: { type: boolean }
+        read_at:
+          type: string
+          format: date-time
+          nullable: true
+        created_at:
+          type: string
+          format: date-time
+
+    NotificationFeed:
+      type: object
+      additionalProperties: false
+      required: [items, unread_count, total, limit, offset]
+      properties:
+        items:
+          type: array
+          items: { $ref: "#/components/schemas/NotificationRead" }
+        unread_count: { type: integer, minimum: 0 }
+        total: { type: integer, minimum: 0 }
+        limit: { type: integer, minimum: 1, maximum: 200 }
+        offset: { type: integer, minimum: 0 }
+
+    MarkReadResponse:
+      type: object
+      additionalProperties: false
+      required: [id, is_read, read_at]
+      properties:
+        id: { type: integer, minimum: 1 }
+        is_read: { type: boolean, enum: [true] }
+        read_at:
+          type: string
+          format: date-time
+
+    BroadcastRecipients:
+      type: object
+      additionalProperties: false
+      description: |
+        Exactly one of `all`, `role`, `user_ids` MUST be supplied. The service
+        layer rejects zero or multiple selectors with 422 (FR-018).
+      properties:
+        all:
+          type: boolean
+          description: When true, target every active user.
+        role:
+          type: string
+          enum: [admin, manager, developer]
+        user_ids:
+          type: array
+          minItems: 1
+          items: { type: integer, minimum: 1 }
+
+    BroadcastRequest:
+      type: object
+      additionalProperties: false
+      required: [recipients, title, message]
+      properties:
+        recipients: { $ref: "#/components/schemas/BroadcastRecipients" }
+        title: { type: string, minLength: 1, maxLength: 120 }
+        message: { type: string, minLength: 1, maxLength: 2000 }
+        type:
+          allOf:
+            - $ref: "#/components/schemas/NotificationType"
+          default: system
+        email_channel:
+          type: boolean
+          default: false
+          description: |
+            When true (and SMTP transport is enabled at runtime), each recipient
+            row is also dispatched via email via a background task. Default
+            false — broadcasts are in-app only unless explicitly opted in.
+
+    BroadcastResult:
+      type: object
+      additionalProperties: false
+      required: [created, type, recipients_resolved]
+      properties:
+        created: { type: integer, minimum: 0 }
+        type: { $ref: "#/components/schemas/NotificationType" }
+        recipients_resolved: { type: integer, minimum: 0 }
+
+    ScanResult:
+      type: object
+      additionalProperties: false
+      required: [scanned_projects, emitted, deduped, as_of]
+      properties:
+        scanned_projects: { type: integer, minimum: 0 }
+        emitted: { type: integer, minimum: 0 }
+        deduped: { type: integer, minimum: 0 }
+        as_of:
+          type: string
+          format: date
+
+    ErrorBody:
+      type: object
+      additionalProperties: false
+      required: [detail]
+      properties:
+        detail:
+          oneOf:
+            - type: string
+            - type: array
+              items:
+                type: object
+
+  responses:
+    Unauthorized:
+      description: Missing or invalid bearer token.
+      content:
+        application/json:
+          schema: { $ref: "#/components/schemas/ErrorBody" }
+    Forbidden:
+      description: Authenticated but role not permitted on this endpoint.
+      content:
+        application/json:
+          schema: { $ref: "#/components/schemas/ErrorBody" }
+    Unprocessable:
+      description: Request validation failed.
+      content:
+        application/json:
+          schema: { $ref: "#/components/schemas/ErrorBody" }
