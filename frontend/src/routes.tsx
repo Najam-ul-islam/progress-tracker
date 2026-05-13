@@ -5,6 +5,8 @@ import { UnauthorizedPage } from "@/modules/auth/pages/UnauthorizedPage";
 import { AuthenticatedLanding } from "@/modules/auth/pages/AuthenticatedLanding";
 import { HydrationGate } from "@/modules/auth/components/HydrationGate";
 import { RequireAuth } from "@/modules/auth/components/RequireAuth";
+import { UsersListPage } from "@/modules/users/pages/UsersListPage";
+import { UserProfilePage } from "@/modules/users/pages/UserProfilePage";
 
 function RootLayout() {
   return (
@@ -23,7 +25,11 @@ export const router = createBrowserRouter([
       { path: "/unauthorized", element: <UnauthorizedPage /> },
       {
         element: <RequireAuth />,
-        children: [{ path: "/", element: <AuthenticatedLanding /> }],
+        children: [
+          { path: "/", element: <AuthenticatedLanding /> },
+          { path: "/users", element: <UsersListPage /> },
+          { path: "/users/:id", element: <UserProfilePage /> },
+        ],
       },
     ],
   },
