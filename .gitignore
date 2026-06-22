@@ -10,6 +10,10 @@ backend/.env.*
 .claude/settings.local.json
 .idea/
 .vscode/
+.kilo/
+node_modules/
+backend/fix_alembic_version.py
+backend/fix_version.py
 
 # Python
 __pycache__/
