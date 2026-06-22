@@ -3,9 +3,10 @@
 Every route body is a thin try/except mapping typed service exceptions to
 canonical HTTP responses per
 `specs/006-payments-distribution/contracts/access-control-matrix.md`.
-No business logic in routes (FR-024).
 
-Guard ordering on every endpoint: 401 → 403 → 404 → 422 (FR-016).
+Guard ordering on every endpoint:
+  1. `requester = Depends(require_any(...))`
+  2. `session = Depends(get_session)`
 """
 
 from __future__ import annotations
@@ -51,35 +52,21 @@ def generate_payment(
             session,
             project_id=project_id,
             total_amount=payload.total_amount,
+            mark_as_paid=payload.mark_as_paid,
         )
     except payments_service.ProjectNotFound as exc:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)
         )
-    except payments_service.ProjectNotBillable as exc:
+    except (
+        payments_service.ProjectNotBillable,
+        payments_service.ShareSumDrift,
+        payments_service.InvalidTotalAmount,
+    ) as exc:
         raise HTTPException(
             status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
             detail=str(exc),
         )
-    except payments_service.ShareSumDrift as exc:
-        raise HTTPException(
-            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
-            detail=str(exc),
-        )
-    except payments_service.InvalidTotalAmount as exc:
-        raise HTTPException(
-            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
-            detail=str(exc),
-        )
-
-
-@router.get("", response_model=list[PaymentRead])
-def list_payments(
-    project_id: int | None = None,
-    session: Session = Depends(get_session),
-    _requester: Any = Depends(require_any("admin", "manager")),
-) -> list[PaymentRead]:
-    return payments_service.list_payments(session, project_id=project_id)
 
 
 @router.get("/summary", response_model=PaymentSummaryRead)
@@ -88,6 +75,18 @@ def get_summary(
     _requester: Any = Depends(require_any("admin", "manager")),
 ) -> PaymentSummaryRead:
     return payments_service.get_payment_summary(session)
+
+
+@router.get("/remaining-balance/{project_id}")
+def get_remaining_balance(
+    project_id: int,
+    session: Session = Depends(get_session),
+    _requester: Any = Depends(require_any("admin", "manager")),
+) -> dict[str, Any]:
+    balance = payments_service.get_remaining_balance(
+        session, project_id=project_id
+    )
+    return {"project_id": project_id, "remaining_balance": balance}
 
 
 @router.get("/developer/me", response_model=list[DeveloperPaymentMineRead])
@@ -100,6 +99,14 @@ def list_my_earnings(
     )
 
 
+@router.get("/", response_model=list[PaymentRead])
+def list_payments(
+    session: Session = Depends(get_session),
+    _requester: Any = Depends(require_any("admin", "manager")),
+) -> list[PaymentRead]:
+    return payments_service.list_payments(session)
+
+
 @router.get("/{id}", response_model=PaymentDetailRead)
 def get_payment(
     id: int,
@@ -107,7 +114,7 @@ def get_payment(
     _requester: Any = Depends(require_any("admin", "manager")),
 ) -> PaymentDetailRead:
     try:
-        return payments_service.get_payment_detail(session, payment_id=id)
+        return payments_service.get_payment_detail(session, id)
     except payments_service.PaymentNotFound as exc:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)
@@ -119,27 +126,23 @@ def update_status(
     id: int,
     payload: PaymentStatusPatch,
     session: Session = Depends(get_session),
-    _requester: Any = Depends(require_admin),
+    requester: Any = Depends(require_admin),
 ) -> PaymentDetailRead:
     try:
         return payments_service.update_payment_status(
-            session, payment_id=id, payload=payload
+            session,
+            payment_id=id,
+            payload=payload,
         )
     except payments_service.PaymentNotFound as exc:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)
         )
-    except payments_service.DeveloperPaymentNotInThisPayment as exc:
-        raise HTTPException(
-            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
-            detail=str(exc),
-        )
-    except payments_service.MutuallyExclusiveFields as exc:
-        raise HTTPException(
-            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
-            detail=str(exc),
-        )
-    except payments_service.EmptyStatusPatchBody as exc:
+    except (
+        payments_service.DeveloperPaymentNotInThisPayment,
+        payments_service.MutuallyExclusiveFields,
+        payments_service.EmptyStatusPatchBody,
+    ) as exc:
         raise HTTPException(
             status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
             detail=str(exc),
