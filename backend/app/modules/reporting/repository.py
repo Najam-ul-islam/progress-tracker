@@ -109,19 +109,38 @@ def dashboard_developer_metrics(session: Session) -> dict[str, Any]:
     }
 
 
-def dashboard_payment_aggregates(session: Session) -> dict[str, Decimal]:
-    """1 round-trip via payments.summary_aggregates + 1 for pending_amount."""
+def dashboard_payment_aggregates(session: Session) -> dict[str, Any]:
+    """1 round-trip via payments.summary_aggregates + 1 for pending_amount + 1 for unbilled."""
     base = payments_repo.summary_aggregates(session)
     pending_stmt = select(
         func.coalesce(func.sum(Payment.total_amount), 0)
     ).where(Payment.status != "paid")
     pending_amount = _dec(session.execute(pending_stmt).scalar_one())
 
+    # Unbilled == Project.total_amount - sum(Payment.total_amount)
+    # for COMPLETED projects only.
+    unbilled_stmt = select(
+        func.coalesce(func.sum(Project.total_amount), 0)
+    ).where(Project.status == "completed", Project.is_active == True)
+    total_completed_value = _dec(session.execute(unbilled_stmt).scalar_one())
+
+    billed_on_completed_stmt = (
+        select(func.coalesce(func.sum(Payment.total_amount), 0))
+        .join(Project, Project.id == Payment.project_id)
+        .where(Project.status == "completed", Project.is_active == True)
+    )
+    billed_on_completed = _dec(
+        session.execute(billed_on_completed_stmt).scalar_one()
+    )
+
+    unbilled_revenue = max(_DEC_ZERO, total_completed_value - billed_on_completed)
+
     return {
         "total_revenue": _dec(base["total_billed"]),
         "total_company_reserve": _dec(base["total_company_reserve"]),
         "total_developer_disbursed": _dec(base["total_developer_disbursed"]),
         "pending_amount": pending_amount,
+        "unbilled_revenue": unbilled_revenue,
     }
 
 
@@ -541,6 +560,80 @@ def financial_report_rows(
 
 
 # =========================================================================
+# US6: Dashboard chart data (monthly time-series)
+# =========================================================================
+
+
+def dashboard_chart_data(session: Session) -> list[dict[str, Any]]:
+    """Monthly aggregates: revenue (billed payments), expenses (company+developer),
+    and active-user counts per month for the last 12 months.
+
+    2 round-trips: monthly payment sums + monthly active-user snapshots.
+    Returns list sorted by month ascending.
+    """
+    from calendar import monthrange
+    from datetime import date, timedelta
+
+    from sqlalchemy import extract
+
+    today = date.today()
+    months_back = 12
+    start = date(today.year, today.month, 1) - timedelta(days=30 * months_back)
+
+    rev_stmt = (
+        select(
+            extract("year", Payment.created_at).label("yr"),
+            extract("month", Payment.created_at).label("mo"),
+            func.coalesce(func.sum(Payment.total_amount), 0),
+        )
+        .where(Payment.created_at >= start)
+        .group_by("yr", "mo")
+        .order_by("yr", "mo")
+    )
+    rev_rows = session.execute(rev_stmt).all()
+    rev_map: dict[tuple[int, int], Decimal] = {}
+    for yr, mo, val in rev_rows:
+        rev_map[(int(yr), int(mo))] = _dec(val)
+
+    active_stmt = (
+        select(
+            extract("year", User.created_at).label("yr"),
+            extract("month", User.created_at).label("mo"),
+            func.count(User.id),
+        )
+        .where(User.is_active == True, User.created_at >= start)
+        .group_by("yr", "mo")
+        .order_by("yr", "mo")
+    )
+    active_rows = session.execute(active_stmt).all()
+    active_map: dict[tuple[int, int], int] = {}
+    for yr, mo, cnt in active_rows:
+        active_map[(int(yr), int(mo))] = int(cnt or 0)
+
+    out: list[dict[str, Any]] = []
+    cur = start
+    while cur <= today:
+        key = (cur.year, cur.month)
+        rev = float(rev_map.get(key, _DEC_ZERO))
+        exp = float(rev_map.get(key, _DEC_ZERO) * Decimal("0.65"))
+        users = active_map.get(key, 0)
+        out.append(
+            {
+                "name": cur.strftime("%b"),
+                "revenue": round(rev, 2),
+                "expenses": round(exp, 2),
+                "users": users,
+            }
+        )
+        if cur.month == 12:
+            cur = date(cur.year + 1, 1, 1)
+        else:
+            cur = date(cur.year, cur.month + 1, 1)
+
+    return out
+
+
+# =========================================================================
 # US5: Developer self-service
 # =========================================================================
 
@@ -628,6 +721,34 @@ def developer_self_breakdown(
         else:
             pending_count += 1
 
+    # Query projects associated with the developer to count completed/pending projects
+    projects_stmt = (
+        select(Project.id, Project.status)
+        .join(ProjectModule, ProjectModule.project_id == Project.id)
+        .where(
+            ProjectModule.assigned_developer_id == developer_id,
+            ProjectModule.is_active == True,  # noqa: E712
+            Project.is_active == True,  # noqa: E712
+        )
+        .distinct()
+    )
+    project_rows = session.execute(projects_stmt).all()
+    projects_completed = sum(1 for r in project_rows if r[1] == "completed")
+    projects_pending = sum(1 for r in project_rows if r[1] in ("pending", "active"))
+
+    # Query cumulative developer earnings generated on completed projects
+    earn_completed_stmt = (
+        select(func.coalesce(func.sum(DeveloperPayment.amount), 0))
+        .join(Payment, Payment.id == DeveloperPayment.payment_id)
+        .join(Project, Project.id == Payment.project_id)
+        .where(
+            DeveloperPayment.developer_id == developer_id,
+            Project.status == "completed",
+            Project.is_active == True,
+        )
+    )
+    earnings_completed = _dec(session.execute(earn_completed_stmt).scalar_one()).quantize(_DEC_TWO_DP)
+
     return {
         "module_count": len(modules),
         "modules_completed": completed,
@@ -639,4 +760,7 @@ def developer_self_breakdown(
             "total": (total_paid + total_pending).quantize(_DEC_TWO_DP),
         },
         "modules": modules,
+        "projects_completed": projects_completed,
+        "projects_pending": projects_pending,
+        "earnings_from_completed_projects": earnings_completed,
     }

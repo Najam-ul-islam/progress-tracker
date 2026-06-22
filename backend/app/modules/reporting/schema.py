@@ -43,12 +43,24 @@ class PaymentsBlock(_Strict):
     total_company_reserve: Decimal
     total_developer_disbursed: Decimal
     pending_amount: Decimal
+    unbilled_revenue: Decimal
 
 
 class DashboardSummary(_Strict):
     projects: ProjectsBlock
     developers: DevelopersBlock
     payments: PaymentsBlock
+
+
+class ChartDataPoint(_Strict):
+    name: str
+    revenue: float
+    expenses: float
+    users: int
+
+
+class ChartDataResponse(_Strict):
+    items: list[ChartDataPoint]
 
 
 # ---------- US2: Projects report ----------
@@ -163,3 +175,6 @@ class DeveloperSelfReport(_Strict):
     modules_pending: int
     earnings: EarningsBlock
     modules: list[DeveloperSelfModule]
+    projects_completed: int
+    projects_pending: int
+    earnings_from_completed_projects: Decimal

@@ -26,6 +26,8 @@ from sqlmodel import Session
 from app.modules.clients import repository as clients_repo
 from app.modules.reporting import repository as reporting_repo
 from app.modules.reporting.schema import (
+    ChartDataPoint,
+    ChartDataResponse,
     DashboardSummary,
     DeveloperReportRow,
     DeveloperSelfReport,
@@ -160,7 +162,15 @@ def get_dashboard_summary(session: Session) -> DashboardSummary:
                 payment_aggregates["total_developer_disbursed"]
             ),
             "pending_amount": _q2(payment_aggregates["pending_amount"]),
+            "unbilled_revenue": _q2(payment_aggregates["unbilled_revenue"]),
         },
+    )
+
+
+def get_dashboard_chart_data(session: Session) -> ChartDataResponse:
+    rows = reporting_repo.dashboard_chart_data(session)
+    return ChartDataResponse(
+        items=[ChartDataPoint.model_validate(r) for r in rows]
     )
 
 

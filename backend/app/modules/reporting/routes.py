@@ -20,6 +20,7 @@ from app.modules.auth.dependencies import (
 )
 from app.modules.reporting import service as reporting_service
 from app.modules.reporting.schema import (
+    ChartDataResponse,
     DashboardSummary,
     DeveloperReportRow,
     DeveloperSelfReport,
@@ -44,6 +45,14 @@ def get_dashboard(
     _requester: Any = Depends(require_any("admin", "manager")),
 ) -> DashboardSummary:
     return reporting_service.get_dashboard_summary(session)
+
+
+@router.get("/dashboard/chart-data", response_model=ChartDataResponse)
+def get_dashboard_chart_data(
+    session: Session = Depends(get_session),
+    _requester: Any = Depends(require_any("admin", "manager")),
+) -> ChartDataResponse:
+    return reporting_service.get_dashboard_chart_data(session)
 
 
 @router.get("/projects", response_model=list[ProjectReportRow])
