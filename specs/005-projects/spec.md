@@ -132,15 +132,16 @@ A developer calls `PATCH /modules/{id}/progress` with `{progress: <0..100>}`. Th
 
 ### User Story 6 — Anyone with read access fetches aggregate project progress (Priority: P2)
 
-An admin, manager, or assigned-developer calls `GET /projects/{id}/progress`. The system computes the aggregate as the **simple average** of the `progress` values of every active module on that project (FR-022), and returns `{project_id, progress, modules: [{id, name, progress, share_percentage}, ...]}`. If the project has no modules, the aggregate is `0`.
+An admin, manager, or assigned-developer calls `GET /projects/{id}/progress`. The system computes the aggregate as the **share-weighted average** of the `progress` values of every active module on that project (FR-022), and returns `{project_id, progress, modules: [{id, name, progress, share_percentage, assigned_developer_id}, ...]}`. If the project has no modules, the aggregate is `0`.
 
 **Why this priority**: P2 because the per-module reads in US2 are sufficient to answer the same question for an attentive operator; this endpoint is the convenience aggregator for dashboards and stand-ups. Ship-able without it, but adopted faster with it.
 
-**Independent Test**: Seed two modules on a project, set their progress to 50 and 100. Call `GET /projects/{id}/progress`; assert HTTP 200 with `progress:75.0` and an array of two module summaries.
+**Independent Test**: Seed two equal-share (35/35) modules on a project, set their progress to 50 and 100. Call `GET /projects/{id}/progress`; assert HTTP 200 with `progress:75.0` and an array of two module summaries.
 
 **Acceptance Scenarios**:
 
-1. **Given** a project with two active modules at progress 50 and 100, **When** an admin calls `GET /projects/{id}/progress`, **Then** the response is HTTP 200 with `{project_id, progress:75.0, modules:[{id, name, progress:50, share_percentage}, {id, name, progress:100, share_percentage}]}` (FR-022).
+1. **Given** a project with two active equal-share (35/35) modules at progress 50 and 100, **When** an admin calls `GET /projects/{id}/progress`, **Then** the response is HTTP 200 with `{project_id, progress:75.0, modules:[{id, name, progress:50, share_percentage, assigned_developer_id}, {id, name, progress:100, share_percentage, assigned_developer_id}]}` (FR-022).
+2. **Given** a project with a 60-share module at 100 and a 10-share module at 0, **When** an admin calls `GET /projects/{id}/progress`, **Then** `progress` is `85.7` — the larger module dominates the share-weighted average (FR-022).
 2. **Given** a project with no active modules, **When** an admin calls `GET /projects/{id}/progress`, **Then** the response is HTTP 200 with `progress:0.0` and an empty `modules` array.
 3. **Given** a project that includes a soft-deleted module, **When** any role calls `GET /projects/{id}/progress`, **Then** the soft-deleted module is excluded from both the average and the array (FR-023).
 4. **Given** a developer assigned to at least one module on the project, **When** they call `GET /projects/{id}/progress`, **Then** the response is HTTP 200.
@@ -201,7 +202,7 @@ An admin calls `DELETE /projects/{id}` or `DELETE /modules/{id}`. The system sof
 - **FR-006**: `start_date` and `end_date` are dates; on every create or update that touches them, `end_date >= start_date` is mandatory (HTTP 422 otherwise).
 - **FR-007**: The system MUST expose `GET /projects` returning every `is_active = true` project. Admins and managers see every row; developers see only projects they have at least one assigned active module on (FR-008).
 - **FR-008**: `GET /projects` and `GET /projects/{id}` MUST filter the result for developers to projects with at least one `project_module` row where `assigned_developer_id = current_user.id` AND `is_active = true`. A developer reading a project they are not assigned to MUST receive HTTP 404 (not 403; the existence is hidden).
-- **FR-022**: `GET /projects/{id}/progress` MUST return `{project_id, progress, modules: [...]}` where `progress` is the simple arithmetic mean of the `progress` values of every `is_active = true` module on the project, or `0.0` when there are no active modules.
+- **FR-022**: `GET /projects/{id}/progress` MUST return `{project_id, progress, modules: [...]}` where `progress` is the **share-weighted average** of the `progress` values of every `is_active = true` module on the project — `sum(progress × share_percentage) / sum(share_percentage)` — rounded to one decimal, or `0.0` when there are no active modules (or total active share is 0). Each module's summary also carries its `assigned_developer_id`.
 
 **Writes**
 
