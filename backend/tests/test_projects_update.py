@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from tests._payments_helpers import seed_payment_for_project
 from tests._projects_helpers import (
     seed_active_client,
     seed_module,
@@ -134,11 +135,22 @@ def test_activation_at_70_succeeds(
     seed_module(
         session, project_id=p.id, developer_id=dev.id, share="70.00"
     )
+    h = auth_header(admin)
+    # advance payment (>= 30%) required to activate
+    pay = seed_payment_for_project(
+        client, project_id=p.id, total_amount="5000.00", auth_header=h
+    )
+    client.patch(
+        f"/payments/{pay['id']}/status",
+        json={"target": "all"},
+        headers=h,
+    )
     response = client.patch(
         f"/projects/{p.id}",
         json={"status": "active"},
-        headers=auth_header(admin),
+        headers=h,
     )
+
     assert response.status_code == 200
     assert response.json()["status"] == "active"
 
@@ -154,6 +166,15 @@ def test_activation_then_back_to_active_rejected(
         session, project_id=p.id, developer_id=dev.id, share="70.00"
     )
     h = auth_header(admin)
+    # advance payment (>= 30%) required to activate
+    pay = seed_payment_for_project(
+        client, project_id=p.id, total_amount="5000.00", auth_header=h
+    )
+    client.patch(
+        f"/payments/{pay['id']}/status",
+        json={"target": "all"},
+        headers=h,
+    )
     r1 = client.patch(
         f"/projects/{p.id}", json={"status": "active"}, headers=h
     )

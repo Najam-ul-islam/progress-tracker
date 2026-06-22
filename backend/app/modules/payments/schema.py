@@ -26,6 +26,7 @@ class PaymentGenerateRequest(BaseModel):
     total_amount: Decimal = Field(
         gt=Decimal("0"), max_digits=12, decimal_places=2
     )
+    mark_as_paid: bool = False
 
 
 class PaymentStatusPatch(BaseModel):

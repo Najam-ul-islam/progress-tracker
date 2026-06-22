@@ -14,7 +14,7 @@ from decimal import Decimal
 import sqlalchemy as sa
 from sqlmodel import Field
 
-from app.db.base import SQLModel
+from app.db.model import SQLModel
 
 
 class Project(SQLModel, table=True):
@@ -40,6 +40,12 @@ class Project(SQLModel, table=True):
         nullable=False,
         index=True,
         sa_column_kwargs={"name": "client_id"},
+    )
+    assigned_developer_id: int | None = Field(
+        default=None,
+        foreign_key="user.id",
+        nullable=True,
+        index=True,
     )
     total_amount: Decimal = Field(
         max_digits=12,

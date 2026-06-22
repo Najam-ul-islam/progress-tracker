@@ -27,16 +27,43 @@ from app.modules.payments.schema import (
     PaymentSummaryRead,
 )
 from app.modules.projects import repository as projects_repo
+from app.modules.notifications import service as notifications_service
 
 
 logger = logging.getLogger(__name__)
+
+
+def _try_notify(
+    session: Session,
+    *,
+    recipient_id: int,
+    title: str,
+    message: str,
+    type_: str,
+    context: str,
+) -> None:
+    try:
+        notifications_service.publish(
+            session,
+            recipient_id=recipient_id,
+            title=title,
+            message=message,
+            type=type_,
+        )
+    except Exception:
+        logger.exception(
+            "payments.notification_failed type=%s recipient_id=%s %s",
+            type_,
+            recipient_id,
+            context,
+        )
 
 
 _QUANT = Decimal("0.01")
 _COMPANY_PCT = Decimal("0.30")
 _DEVELOPER_PCT = Decimal("0.70")
 _DEVELOPER_BASE = Decimal("70")
-_BILLABLE_STATUSES = {"active", "completed"}
+_BILLABLE_STATUSES = {"pending", "active", "completed"}
 
 
 # ---------- Typed exceptions (per access-control-matrix.md) ----------
@@ -186,6 +213,7 @@ def generate_payment_distribution(
     session: Session,
     project_id: int,
     total_amount: Decimal,
+    mark_as_paid: bool = False,
 ) -> PaymentDetailRead:
     if total_amount <= Decimal("0"):
         raise InvalidTotalAmount()
@@ -218,7 +246,7 @@ def generate_payment_distribution(
         total_amount=_quantize(total_amount),
         company_amount=company_amount,
         developer_amount=developer_amount,
-        status="pending",
+        status="paid" if mark_as_paid else "pending",
     )
     children = [
         DeveloperPayment(
@@ -227,7 +255,7 @@ def generate_payment_distribution(
             module_id=m.id,  # type: ignore[arg-type]
             share_percentage=m.share_percentage,
             amount=amount,
-            status="pending",
+            status="paid" if mark_as_paid else "pending",
         )
         for m, amount in slices
     ]
@@ -245,6 +273,19 @@ def generate_payment_distribution(
         payment.total_amount,
         len(persisted_children),
     )
+
+    slice_map = {m.id: (m, amount) for m, amount in slices}
+    for child in persisted_children:
+        m, amount = slice_map[child.module_id]
+        _try_notify(
+            session,
+            recipient_id=child.developer_id,
+            title=f"Payout calculated: {project.name}",
+            message=f"Your payout for module '{m.name}' on project '{project.name}' has been calculated: {amount}.",
+            type_="payment",
+            context=f"payment_id={payment.id} developer={child.developer_id} module={child.module_id}",
+        )
+
     return _to_detail_read(payment, persisted_children)
 
 
@@ -318,6 +359,13 @@ def update_payment_status(
     if payment is None:
         raise PaymentNotFound()
 
+    children_before = payments_repo.list_payment_children(
+        session, payment_id
+    )
+    pending_before = {
+        c.id for c in children_before if c.status == "pending"
+    }
+
     if payload.developer_payment_id is not None:
         child = payments_repo.get_developer_payment(
             session, payload.developer_payment_id
@@ -337,6 +385,23 @@ def update_payment_status(
         payment = payments_repo.update_payment_status(
             session, payment, new_status
         )
+
+    project = projects_repo.get_project_by_id(session, payment.project_id)
+    project_name = project.name if project else "Unknown project"
+
+    for child in children:
+        if child.status == "paid" and child.id in pending_before:
+            module = projects_repo.get_module_by_id(session, child.module_id)
+            module_name = module.name if module else "Unknown module"
+            _try_notify(
+                session,
+                recipient_id=child.developer_id,
+                title=f"Payment released: {project_name}",
+                message=f"Your payment of {child.amount} for module '{module_name}' on project '{project_name}' has been released.",
+                type_="payment_paid",
+                context=f"payment_id={payment.id} developer={child.developer_id} module={child.module_id}",
+            )
+
     logger.info(
         "payment.status_updated payment_id=%s status=%s",
         payment.id,
@@ -346,6 +411,27 @@ def update_payment_status(
 
 
 # ---------- Summary (US5, FR-020) ----------
+
+
+def get_remaining_balance(session: Session, project_id: int) -> Decimal:
+    """Returns Project.total_amount - sum(Payment.total_amount) for the project."""
+    project = projects_repo.get_project_by_id(session, project_id)
+    if project is None:
+        return Decimal("0")
+
+    payments = payments_repo.list_payments(session, project_id=project_id)
+    billed = sum((p.total_amount for p in payments), Decimal("0"))
+    return _quantize(project.total_amount - billed)
+
+
+def get_paid_total(session: Session, project_id: int) -> Decimal:
+    """Returns the sum of all payments marked as 'paid' for this project."""
+    payments = payments_repo.list_payments(session, project_id=project_id)
+    paid = sum(
+        (p.total_amount for p in payments if p.status == "paid"),
+        Decimal("0"),
+    )
+    return _quantize(paid)
 
 
 def get_payment_summary(session: Session) -> PaymentSummaryRead:

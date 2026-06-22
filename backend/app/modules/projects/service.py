@@ -17,8 +17,14 @@ from typing import Any
 from sqlmodel import Session
 
 from app.modules.clients import repository as clients_repo
+from app.modules.notifications import service as notifications_service
+from app.modules.payments import service as payments_service
 from app.modules.projects import repository as projects_repo
 from app.modules.projects.schema import (
+    DeveloperModuleView,
+    DeveloperProgressModule,
+    DeveloperProgressResponse,
+    DeveloperProjectView,
     ModuleCreate,
     ModuleProgressSummary,
     ModuleProgressUpdate,
@@ -36,6 +42,11 @@ logger = logging.getLogger(__name__)
 
 
 _CAP = Decimal("70.00")
+# Advance payment gate: a project may activate once the client has paid at least
+# 30% of the total up front. The 30%–50% *range* is enforced at advance-invoice
+# generation (and on the frontend form); the activation gate only enforces the
+# 30% floor so that paying more than 50% up front never blocks activation.
+_ADVANCE_MIN_PCT = Decimal("0.30")
 
 
 # ---------- Typed exceptions (per contracts/access-control-matrix.md) ----------
@@ -84,6 +95,17 @@ class ActivationGateError(Exception):
             f"module shares must sum to exactly 70.00 to activate (current: {current})"
         )
         self.current = current
+
+
+class AdvancePaymentRequiredError(Exception):
+    """Activation requires at least a 30% advance payment (FR-013 → HTTP 422)."""
+
+    def __init__(self, *, paid: Decimal, required: Decimal) -> None:
+        super().__init__(
+            f"30% advance payment required to activate (paid: {paid}, required: {required})"
+        )
+        self.paid = paid
+        self.required = required
 
 
 class IllegalStatusTransitionError(Exception):
@@ -147,12 +169,135 @@ def _maybe_autocomplete_project(session: Session, project: Any) -> None:
             "projects.autocomplete: project_id=%s flipped active→completed",
             project.id,
         )
+        # Auto-bill remaining balance on completion (Hybrid Option 3).
+        balance = payments_service.get_remaining_balance(
+            session, project_id=project.id
+        )
+        if balance > Decimal("0"):
+            try:
+                payments_service.generate_payment_distribution(
+                    session, project_id=project.id, total_amount=balance
+                )
+                logger.info(
+                    "projects.autocomplete: auto-billed remaining balance amount=%s project_id=%s",
+                    balance,
+                    project.id,
+                )
+            except Exception:
+                # Log but don't fail project completion if billing fails.
+                logger.exception(
+                    "projects.autocomplete: failed to auto-bill remaining balance project_id=%s",
+                    project.id,
+                )
 
 
 def _ensure_active_developer(session: Session, user_id: int) -> None:
     user = users_repo.get_user_by_id(session, user_id)
     if user is None or user.role != "developer" or not user.is_active:
         raise DeveloperNotEligibleError()
+
+
+def _build_developer_project_view(
+    session: Session, project: Any, user_id: int
+) -> DeveloperProjectView:
+    modules = [
+        m
+        for m in projects_repo.list_active_modules(session, project.id)
+        if m.assigned_developer_id == user_id
+    ]
+    module_views = []
+    for m in modules:
+        module_allocation = (project.total_amount * m.share_percentage / Decimal("100")).quantize(Decimal("0.01"))
+        earned_amount = (module_allocation * Decimal(m.progress) / Decimal("100")).quantize(Decimal("0.01"))
+        module_views.append(
+            DeveloperModuleView(
+                id=m.id,
+                name=m.name,
+                progress=m.progress,
+                status=m.status,
+                module_allocation=module_allocation,
+                earned_amount=earned_amount,
+            )
+        )
+    return DeveloperProjectView(
+        id=project.id,
+        name=project.name,
+        description=project.description,
+        status=project.status,
+        is_active=project.is_active,
+        modules=module_views,
+    )
+
+
+def _try_notify(
+    session: Session,
+    *,
+    recipient_id: int,
+    title: str,
+    message: str,
+    type_: str,
+    context: str,
+) -> None:
+    try:
+        notifications_service.publish(
+            session,
+            recipient_id=recipient_id,
+            title=title,
+            message=message,
+            type=type_,
+        )
+    except Exception:
+        logger.exception(
+            "projects.notification_failed type=%s recipient_id=%s %s",
+            type_,
+            recipient_id,
+            context,
+        )
+
+
+def _notify_assignment(
+    session: Session,
+    *,
+    developer_id: int,
+    module_name: str,
+    project_name: str,
+) -> None:
+    _try_notify(
+        session,
+        recipient_id=developer_id,
+        title=f"Assigned to module: {module_name}",
+        message=f"You have been assigned to module '{module_name}' on project '{project_name}'.",
+        type_="assignment",
+        context=f"module={module_name} project={project_name}",
+    )
+
+
+def _notify_progress_update(
+    session: Session,
+    *,
+    module_name: str,
+    project_name: str,
+    developer_name: str,
+    progress: int,
+) -> None:
+    title = f"Progress updated: {module_name}"
+    message = (
+        f"Developer '{developer_name}' updated progress on module "
+        f"'{module_name}' in project '{project_name}' to {progress}%."
+    )
+    # TODO: When a project-owner-admin field is added to Project or ProjectModule,
+    # replace this fan-out with a targeted notification to that specific admin.
+    # Fan-out to all active admins is the current correct approach because no
+    # owner field exists (see spec 016-scoped-financial-visibility decision).
+    for admin in users_repo.list_active_admins(session):
+        _try_notify(
+            session,
+            recipient_id=admin.id,
+            title=title,
+            message=message,
+            type_="progress_update",
+            context=f"module={module_name} project={project_name} admin={admin.id}",
+        )
 
 
 # ---------- Project operations ----------
@@ -170,11 +315,15 @@ def create_project(
         )
         raise ClientNotActiveError()
 
+    if payload.assigned_developer_id:
+        _ensure_active_developer(session, payload.assigned_developer_id)
+
     project = projects_repo.create_project(
         session,
         name=payload.name,
         description=payload.description,
         client_id=payload.client_id,
+        assigned_developer_id=payload.assigned_developer_id,
         total_amount=payload.total_amount,
         company_share=Decimal("30.00"),
         developer_share=Decimal("70.00"),
@@ -189,23 +338,28 @@ def create_project(
 
 def list_projects(
     session: Session, *, requester: Any
-) -> list[ProjectRead]:
+) -> list[ProjectRead | DeveloperProjectView]:
     if requester.role == "developer":
         rows = projects_repo.list_projects_for_user(session, requester.id)
-    else:
-        rows = projects_repo.list_projects(session)
+        return [
+            _build_developer_project_view(session, p, requester.id)
+            for p in rows
+        ]
+    rows = projects_repo.list_projects(session)
     return [ProjectRead.model_validate(p) for p in rows]
 
 
 def get_project(
     session: Session, *, project_id: int, requester: Any
-) -> ProjectRead:
+) -> ProjectRead | DeveloperProjectView:
     if requester.role == "developer":
         project = projects_repo.get_project_for_user(
             session, project_id, requester.id
         )
-    else:
-        project = projects_repo.get_project_by_id(session, project_id)
+        if project is None:
+            raise ProjectNotFoundError(project_id)
+        return _build_developer_project_view(session, project, requester.id)
+    project = projects_repo.get_project_by_id(session, project_id)
     if project is None:
         raise ProjectNotFoundError(project_id)
     return ProjectRead.model_validate(project)
@@ -238,6 +392,25 @@ def update_project(
             )
             raise ActivationGateError(current=current)
 
+        # Advance payment floor: at least 30% of the total must be paid.
+        paid_total = payments_service.get_paid_total(session, project_id)
+        required_advance = (project.total_amount * _ADVANCE_MIN_PCT).quantize(
+            Decimal("0.01")
+        )
+        if paid_total < required_advance:
+            logger.info(
+                "projects.activation_gate: project_id=%s paid=%s required_advance=%s",
+                project_id,
+                paid_total,
+                required_advance,
+            )
+            raise AdvancePaymentRequiredError(
+                paid=paid_total, required=required_advance
+            )
+
+    if fields.get("assigned_developer_id"):
+        _ensure_active_developer(session, fields["assigned_developer_id"])
+
     # Date-range merge check: validate the post-merge pair, not just the patch.
     new_start: Date = fields.get("start_date", project.start_date)
     new_end: Date = fields.get("end_date", project.end_date)
@@ -266,7 +439,7 @@ def delete_project(session: Session, *, project_id: int) -> None:
 
 def compute_progress(
     session: Session, *, project_id: int, requester: Any
-) -> ProjectProgressResponse:
+) -> ProjectProgressResponse | DeveloperProgressResponse:
     if requester.role == "developer":
         project = projects_repo.get_project_for_user(
             session, project_id, requester.id
@@ -277,11 +450,47 @@ def compute_progress(
         raise ProjectNotFoundError(project_id)
 
     modules = projects_repo.list_active_modules(session, project_id)
-    if not modules:
+    # FR-022: share-weighted average of module progress. Each module contributes
+    # progress × share_percentage, normalised by the total active share, so a
+    # larger module moves the needle more than a small one. Falls back to 0 when
+    # there are no modules (or, defensively, zero total share).
+    total_share = sum((m.share_percentage for m in modules), Decimal("0"))
+    if not modules or total_share == Decimal("0"):
         progress = 0.0
     else:
-        progress = round(
-            sum(m.progress for m in modules) / len(modules), 1
+        weighted = sum(
+            (m.progress * m.share_percentage for m in modules), Decimal("0")
+        )
+        progress = round(float(weighted / total_share), 1)
+
+    if requester.role == "developer":
+        own_modules = [
+            m
+            for m in modules
+            if m.assigned_developer_id == requester.id
+        ]
+        return DeveloperProgressResponse(
+            project_id=project.id,
+            progress=progress,
+            modules=[
+                DeveloperProgressModule(
+                    id=m.id,
+                    name=m.name,
+                    progress=m.progress,
+                    status=m.status,
+                    module_allocation=(
+                        project.total_amount * m.share_percentage / Decimal("100")
+                    ).quantize(Decimal("0.01")),
+                    earned_amount=(
+                        project.total_amount
+                        * m.share_percentage
+                        / Decimal("100")
+                        * Decimal(m.progress)
+                        / Decimal("100")
+                    ).quantize(Decimal("0.01")),
+                )
+                for m in own_modules
+            ],
         )
 
     return ProjectProgressResponse(
@@ -339,6 +548,12 @@ def create_module(
         module.id,
         project_id,
     )
+    _notify_assignment(
+        session,
+        developer_id=payload.assigned_developer_id,
+        module_name=payload.name,
+        project_name=project.name,
+    )
     return ModuleRead.model_validate(module)
 
 
@@ -370,6 +585,7 @@ def update_module(
                 current=current, requested=fields["share_percentage"]
             )
 
+    old_developer_id = module.assigned_developer_id
     module = projects_repo.update_module(session, module, **fields)
     _maybe_autocomplete_project(session, project)
     logger.info(
@@ -377,6 +593,15 @@ def update_module(
         module_id,
         list(fields.keys()),
     )
+    if "assigned_developer_id" in fields:
+        new_dev = fields["assigned_developer_id"]
+        if new_dev != old_developer_id:
+            _notify_assignment(
+                session,
+                developer_id=new_dev,
+                module_name=module.name,
+                project_name=project.name,
+            )
     return ModuleRead.model_validate(module)
 
 
@@ -422,6 +647,15 @@ def update_module_progress(
         status=derived_status,
     )
     _maybe_autocomplete_project(session, project)
+    developer = users_repo.get_user_by_id(session, module.assigned_developer_id)
+    developer_name = developer.name if developer else "Unknown"
+    _notify_progress_update(
+        session,
+        module_name=module.name,
+        project_name=project.name,
+        developer_name=developer_name,
+        progress=patch.progress,
+    )
     logger.info(
         "projects.update_module_progress: module_id=%s progress=%s status=%s",
         module_id,

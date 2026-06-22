@@ -32,7 +32,6 @@ from app.modules.projects.schema import (
     ModuleRead,
     ModuleUpdate,
     ProjectCreate,
-    ProjectProgressResponse,
     ProjectRead,
     ProjectUpdate,
 )
@@ -69,20 +68,20 @@ def create_project(
         )
 
 
-@router.get("", response_model=list[ProjectRead])
+@router.get("")
 def list_projects(
     session: Session = Depends(get_session),
     requester: Any = Depends(get_current_user),
-) -> list[ProjectRead]:
+):
     return projects_service.list_projects(session, requester=requester)
 
 
-@router.get("/{id}", response_model=ProjectRead)
+@router.get("/{id}")
 def get_project(
     id: int,
     session: Session = Depends(get_session),
     requester: Any = Depends(get_current_user),
-) -> ProjectRead:
+):
     try:
         return projects_service.get_project(
             session, project_id=id, requester=requester
@@ -110,6 +109,7 @@ def update_project(
         )
     except (
         projects_service.ActivationGateError,
+        projects_service.AdvancePaymentRequiredError,
         projects_service.IllegalStatusTransitionError,
         projects_service.DateRangeError,
     ) as exc:
@@ -133,12 +133,12 @@ def delete_project(
         )
 
 
-@router.get("/{id}/progress", response_model=ProjectProgressResponse)
+@router.get("/{id}/progress")
 def get_project_progress(
     id: int,
     session: Session = Depends(get_session),
     requester: Any = Depends(get_current_user),
-) -> ProjectProgressResponse:
+):
     try:
         return projects_service.compute_progress(
             session, project_id=id, requester=requester

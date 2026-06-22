@@ -6,6 +6,7 @@ unassigned developers.
 
 from __future__ import annotations
 
+from tests._payments_helpers import seed_payment_for_project
 from tests._projects_helpers import (
     seed_active_client,
     seed_module,
@@ -14,10 +15,17 @@ from tests._projects_helpers import (
 
 
 def _activate(client, admin, auth_header, project_id):
+    # Activation is gated on a paid advance (>= 30% of total). Seeded projects
+    # total 10000, so collect and mark a 50% advance paid before transitioning.
+    h = auth_header(admin)
+    pay = seed_payment_for_project(
+        client, project_id=project_id, total_amount="5000.00", auth_header=h
+    )
+    client.patch(
+        f"/payments/{pay['id']}/status", json={"target": "all"}, headers=h
+    )
     r = client.patch(
-        f"/projects/{project_id}",
-        json={"status": "active"},
-        headers=auth_header(admin),
+        f"/projects/{project_id}", json={"status": "active"}, headers=h
     )
     assert r.status_code == 200, r.text
 
@@ -69,6 +77,59 @@ def test_progress_is_mean_of_module_progress(
     body = response.json()
     assert body["progress"] == 60.0
     assert {m["name"] for m in body["modules"]} == {"m1", "m2"}
+
+
+def test_progress_is_share_weighted(
+    client, session, seed_admin, seed_developer, auth_header
+):
+    """FR-022: progress is weighted by share, so a bigger module dominates.
+
+    m1 share=60 progress=100, m2 share=10 progress=0.
+    Weighted = (100*60 + 0*10) / 70 = 85.7. A simple mean would be 50.0.
+    """
+    admin = seed_admin()
+    dev = seed_developer()
+    c = seed_active_client(session)
+    p = seed_pending_project(session, client_id=c.id)
+    m1 = seed_module(
+        session, project_id=p.id, developer_id=dev.id, share="60.00", name="m1"
+    )
+    m2 = seed_module(
+        session, project_id=p.id, developer_id=dev.id, share="10.00", name="m2"
+    )
+    _activate(client, admin, auth_header, p.id)
+    client.patch(
+        f"/modules/{m1.id}/progress",
+        json={"progress": 100},
+        headers=auth_header(admin),
+    )
+    client.patch(
+        f"/modules/{m2.id}/progress",
+        json={"progress": 0},
+        headers=auth_header(admin),
+    )
+    response = client.get(
+        f"/projects/{p.id}/progress", headers=auth_header(admin)
+    )
+    assert response.status_code == 200
+    assert response.json()["progress"] == 85.7
+
+
+def test_progress_summary_includes_assignee(
+    client, session, seed_admin, seed_developer, auth_header
+):
+    """The progress summary carries assigned_developer_id for ownership checks."""
+    admin = seed_admin()
+    dev = seed_developer()
+    c = seed_active_client(session)
+    p = seed_pending_project(session, client_id=c.id)
+    seed_module(session, project_id=p.id, developer_id=dev.id, share="70.00")
+    _activate(client, admin, auth_header, p.id)
+    response = client.get(
+        f"/projects/{p.id}/progress", headers=auth_header(admin)
+    )
+    assert response.status_code == 200
+    assert response.json()["modules"][0]["assigned_developer_id"] == dev.id
 
 
 def test_progress_excludes_soft_deleted_modules(

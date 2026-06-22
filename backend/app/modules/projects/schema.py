@@ -25,6 +25,7 @@ class ProjectCreate(BaseModel):
     name: str = Field(min_length=1, max_length=200)
     description: str | None = None
     client_id: int = Field(gt=0)
+    assigned_developer_id: int | None = Field(default=None, gt=0)
     total_amount: Decimal = Field(
         gt=Decimal("0"), max_digits=12, decimal_places=2
     )
@@ -46,6 +47,7 @@ class ProjectUpdate(BaseModel):
     total_amount: Decimal | None = Field(
         default=None, gt=Decimal("0"), max_digits=12, decimal_places=2
     )
+    assigned_developer_id: int | None = Field(default=None, gt=0)
     start_date: date | None = None
     end_date: date | None = None
     status: Literal["active"] | None = None  # only the manual transition
@@ -58,13 +60,14 @@ class ProjectUpdate(BaseModel):
                 self.name,
                 self.description,
                 self.total_amount,
+                self.assigned_developer_id,
                 self.start_date,
                 self.end_date,
                 self.status,
             )
         ):
             raise ValueError(
-                "at least one of name/description/total_amount/start_date/end_date/status must be provided"
+                "at least one of name/description/total_amount/assigned_developer_id/start_date/end_date/status must be provided"
             )
         return self
 
@@ -161,6 +164,7 @@ class ModuleProgressSummary(BaseModel):
     name: str
     progress: int
     share_percentage: Decimal
+    assigned_developer_id: int
 
 
 class ProjectProgressResponse(BaseModel):
@@ -171,3 +175,44 @@ class ProjectProgressResponse(BaseModel):
 
 ProjectListResponse = list[ProjectRead]
 ModuleListResponse = list[ModuleRead]
+
+
+class DeveloperModuleView(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: int
+    name: str
+    progress: int
+    status: ModuleStatus
+    module_allocation: Decimal
+    earned_amount: Decimal
+
+
+class DeveloperProjectView(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: int
+    name: str
+    description: str | None
+    status: ProjectStatus
+    is_active: bool
+    modules: list[DeveloperModuleView]
+
+
+class DeveloperProgressModule(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: int
+    name: str
+    progress: int
+    status: ModuleStatus
+    module_allocation: Decimal
+    earned_amount: Decimal
+
+
+class DeveloperProgressResponse(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    project_id: int
+    progress: float
+    modules: list[DeveloperProgressModule]
