@@ -13,7 +13,7 @@ from enum import Enum
 import sqlalchemy as sa
 from sqlmodel import Field
 
-from app.db.base import SQLModel
+from app.db.model import SQLModel
 
 
 class NotificationType(str, Enum):
@@ -23,6 +23,7 @@ class NotificationType(str, Enum):
     PAYMENT = "payment"
     PAYMENT_PAID = "payment_paid"
     DEADLINE = "deadline"
+    PROGRESS_UPDATE = "progress_update"
     SYSTEM = "system"
 
 

@@ -51,20 +51,26 @@ export function EditUserDialog({ user, open, onOpenChange }: EditUserDialogProps
   const mutation = useUpdateUser();
   const [formError, setFormError] = useState<string | null>(null);
 
+  // Reset form error when the dialog opens or the target changes.
+  const [prevOpen, setPrevOpen] = useState(open);
+  const [prevUserId, setPrevUserId] = useState(user?.id);
+  if (open !== prevOpen || user?.id !== prevUserId) {
+    setPrevOpen(open);
+    setPrevUserId(user?.id);
+    if (open) setFormError(null);
+  }
+
   const form = useForm<EditUserFormValues>({
     resolver: zodResolver(editUserSchema),
     defaultValues: user ? userToFormValues(user) : { name: "", role: "developer", isActive: true },
   });
 
-  // Reset form + error state whenever a new user is opened. We intentionally
-  // depend only on `user.id` to avoid loops with mutation/form identities.
-  // eslint-disable-next-line react-hooks/exhaustive-deps
+  // Reset form whenever a new user is opened.
   useEffect(() => {
-    if (user) {
+    if (open && user) {
       form.reset(userToFormValues(user));
-      setFormError(null);
     }
-  }, [user?.id]);
+  }, [user, open, form]);
 
   if (!allowed || !user) return null;
 

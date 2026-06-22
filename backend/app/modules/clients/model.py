@@ -12,7 +12,7 @@ from datetime import datetime, timezone
 import sqlalchemy as sa
 from sqlmodel import Field
 
-from app.db.base import SQLModel
+from app.db.model import SQLModel
 
 
 class Client(SQLModel, table=True):

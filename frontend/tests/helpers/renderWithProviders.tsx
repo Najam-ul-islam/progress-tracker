@@ -58,6 +58,8 @@ export function renderRoute(
           <Route path="/login" element={<div>LOGIN</div>} />
           <Route path="/users" element={<div>USERS_LIST</div>} />
           <Route path="/users/:id" element={<div>USER_PROFILE</div>} />
+          <Route path="/settings" element={<div>SETTINGS</div>} />
+          <Route path="/projects" element={<div>PROJECTS</div>} />
           {opts.extraRoutes}
         </Routes>
       </MemoryRouter>

@@ -4,6 +4,7 @@ import { RouterProvider } from "react-router-dom";
 import { router } from "@/routes";
 import { queryClient } from "@/lib/query-client";
 import { attachCrossTabSync } from "@/modules/auth/store/cross-tab";
+import { ThemeProvider } from "@/context/ThemeContext";
 
 function App() {
   useEffect(() => {
@@ -12,7 +13,9 @@ function App() {
 
   return (
     <QueryClientProvider client={queryClient}>
-      <RouterProvider router={router} />
+      <ThemeProvider>
+        <RouterProvider router={router} />
+      </ThemeProvider>
     </QueryClientProvider>
   );
 }

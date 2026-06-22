@@ -38,6 +38,11 @@ def test_developer_a_sees_own_data_only(
     # d1 has 2 modules: auth-flow (active, completed) + billing (completed).
     assert body["module_count"] == 2
     assert body["modules_completed"] == 2
+    assert body["projects_completed"] == 1
+    assert body["projects_pending"] == 1
+    # Devon One has billing module with 40% share in completed project.
+    # Total project payment is 3000.00, so d1's earning on completed project is 3000 * 0.4 = 1200.00.
+    assert Decimal(body["earnings_from_completed_projects"]) == Decimal("1200.00")
 
 
 def test_developer_b_sees_disjoint_data(
@@ -105,3 +110,6 @@ def test_developer_with_no_assignments(
     assert Decimal(body["earnings"]["paid"]) == Decimal("0.00")
     assert Decimal(body["earnings"]["pending"]) == Decimal("0.00")
     assert Decimal(body["earnings"]["total"]) == Decimal("0.00")
+    assert body["projects_completed"] == 0
+    assert body["projects_pending"] == 0
+    assert Decimal(body["earnings_from_completed_projects"]) == Decimal("0.00")

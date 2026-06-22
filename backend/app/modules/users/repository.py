@@ -71,3 +71,12 @@ def count_active_admins(
         statement = statement.where(User.id != exclude_id)
     result = session.exec(statement).one()
     return int(result)
+
+
+def list_active_admins(session: Session) -> list[User]:
+    statement = (
+        select(User)
+        .where(User.role == "admin", User.is_active == True)  # noqa: E712
+        .order_by(User.id)
+    )
+    return list(session.exec(statement).all())

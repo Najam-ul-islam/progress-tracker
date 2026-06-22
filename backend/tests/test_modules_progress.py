@@ -6,6 +6,7 @@ projects, FR-014 active→completed auto-transition.
 
 from __future__ import annotations
 
+from tests._payments_helpers import seed_payment_for_project
 from tests._projects_helpers import (
     seed_active_client,
     seed_active_project,
@@ -15,10 +16,17 @@ from tests._projects_helpers import (
 
 
 def _activate(client, admin, auth_header, project_id):
+    # Activation is gated on a paid advance (>= 30% of total). Seeded projects
+    # total 10000, so collect and mark a 50% advance paid before transitioning.
+    h = auth_header(admin)
+    pay = seed_payment_for_project(
+        client, project_id=project_id, total_amount="5000.00", auth_header=h
+    )
+    client.patch(
+        f"/payments/{pay['id']}/status", json={"target": "all"}, headers=h
+    )
     r = client.patch(
-        f"/projects/{project_id}",
-        json={"status": "active"},
-        headers=auth_header(admin),
+        f"/projects/{project_id}", json={"status": "active"}, headers=h
     )
     assert r.status_code == 200, r.text
 

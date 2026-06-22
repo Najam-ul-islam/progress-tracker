@@ -12,7 +12,7 @@ from typing import Literal
 from sqlalchemy import CheckConstraint
 from sqlmodel import Field
 
-from app.db.base import SQLModel
+from app.db.model import SQLModel
 
 
 UserRole = Literal["admin", "manager", "developer"]

@@ -3,6 +3,7 @@ import { Button } from "@/components/ui/button";
 import { useLogout } from "@/modules/auth/hooks/useLogout";
 import { useSessionStore } from "@/modules/auth/store/session.store";
 import { IfRole } from "@/modules/users/components/IfRole";
+import { NotificationBell } from "@/modules/notifications/components/NotificationBell";
 import { cn } from "@/lib/cn";
 
 export function AppHeader() {
@@ -27,9 +28,78 @@ export function AppHeader() {
               Users
             </NavLink>
           </IfRole>
-        </nav>
-      </div>
-      <div className="flex items-center gap-3">
+          <IfRole roles={["admin", "manager"]}>
+            <NavLink
+              to="/clients"
+              className={({ isActive }) =>
+                cn(
+                  "text-slate-600 hover:text-slate-900",
+                  isActive && "font-medium text-slate-900"
+                )
+              }
+            >
+              Clients
+            </NavLink>
+          </IfRole>
+          <NavLink
+            to="/projects"
+            className={({ isActive }) =>
+              cn(
+                "text-slate-600 hover:text-slate-900",
+                isActive && "font-medium text-slate-900"
+              )
+            }
+          >
+            Projects
+          </NavLink>
+          <IfRole roles={["admin", "manager"]}>
+            <NavLink
+              to="/payments"
+              className={({ isActive }) =>
+                cn(
+                  "text-slate-600 hover:text-slate-900",
+                  isActive && "font-medium text-slate-900"
+                )
+              }
+            >
+              Payments
+            </NavLink>
+          </IfRole>
+          <IfRole roles={["admin", "manager"]}>
+            <NavLink
+              to="/analytics"
+              className={({ isActive }) =>
+                cn(
+                  "text-slate-600 hover:text-slate-900",
+                  isActive && "font-medium text-slate-900"
+                )
+              }
+            >
+              Analytics
+            </NavLink>
+          </IfRole>
+<IfRole roles={["developer"]}>
+              <NavLink
+                to="/earnings"
+                className={({ isActive }) =>
+                  cn("text-slate-600 hover:text-slate-900", isActive && "font-medium text-slate-900")
+                }
+              >
+                My Earnings
+              </NavLink>
+            </IfRole>
+            <NavLink
+              to="/settings"
+              className={({ isActive }) =>
+                cn("text-slate-600 hover:text-slate-900", isActive && "font-medium text-slate-900")
+              }
+            >
+              Settings
+            </NavLink>
+          </nav>
+        </div>
+        <div className="flex items-center gap-3">
+        <NotificationBell />
         {user ? (
           <span className="text-sm text-slate-600">
             {user.name} <span className="text-slate-400">·</span> {user.role}

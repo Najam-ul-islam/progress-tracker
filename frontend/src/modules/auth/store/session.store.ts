@@ -91,6 +91,8 @@ export const selectIsAuthenticated = (s: SessionState): boolean =>
 
 export const selectRole = (s: SessionState): Role | null => s.user?.role ?? null;
 
+export const selectUserId = (s: SessionState): number | null => s.user?.id ?? null;
+
 export const selectCanAccess = (s: SessionState, allowed: readonly Role[]): boolean => {
   const role = selectRole(s);
   return role !== null && allowed.includes(role);

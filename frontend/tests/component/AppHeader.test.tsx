@@ -23,4 +23,22 @@ describe("AppHeader nav link RBAC", () => {
     renderRoute("/", <AppHeader />);
     expect(screen.queryByRole("link", { name: /users/i })).not.toBeInTheDocument();
   });
+
+  it("shows Settings link for all authenticated users", () => {
+    seedSession({ role: "developer", id: 3, name: "Devon" });
+    renderRoute("/", <AppHeader />);
+    expect(screen.getByRole("link", { name: /settings/i })).toBeInTheDocument();
+  });
+
+  it("shows My Earnings link for developer only", () => {
+    seedSession({ role: "developer", id: 3, name: "Devon" });
+    renderRoute("/", <AppHeader />);
+    expect(screen.getByRole("link", { name: /my earnings/i })).toBeInTheDocument();
+  });
+
+  it("hides My Earnings link for admin", () => {
+    seedSession({ role: "admin", id: 1, name: "Ada" });
+    renderRoute("/", <AppHeader />);
+    expect(screen.queryByRole("link", { name: /my earnings/i })).not.toBeInTheDocument();
+  });
 });

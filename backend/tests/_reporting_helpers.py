@@ -260,6 +260,7 @@ def assert_dashboard_payload_shape(payload: dict) -> None:
         "total_company_reserve",
         "total_developer_disbursed",
         "pending_amount",
+        "unbilled_revenue",
     }
 
 

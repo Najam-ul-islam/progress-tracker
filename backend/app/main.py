@@ -12,6 +12,7 @@ from __future__ import annotations
 import importlib
 
 from fastapi import FastAPI
+from fastapi.middleware.cors import CORSMiddleware
 
 from app.core.config import get_settings
 
@@ -49,4 +50,13 @@ def register_modules(application: FastAPI) -> None:
 get_settings()  # FR-010 / R5: fail fast if JWT_SECRET_KEY (or other required vars) is missing.
 
 app = FastAPI(title="Progress Tracker Backend")
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["http://localhost:5173", "http://localhost:3000"],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
 register_modules(app)

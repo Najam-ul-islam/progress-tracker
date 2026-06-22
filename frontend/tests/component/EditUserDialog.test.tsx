@@ -4,7 +4,6 @@ import userEvent from "@testing-library/user-event";
 import { server } from "../mocks/server";
 import {
   seededUsers,
-  userUpdateConflict,
   userUpdateSuccess,
   userUpdateValidation,
   userStatusConflict,
