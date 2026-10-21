@@ -1,0 +1,12 @@
+# Environments & caches
+.venv/ venv/ env/ __pycache__/ .mypy_cache/ .pytest_cache/
+*.pyc *.pyo *.egg-info/
+
+# IDE & Git
+.git/ .vscode/ .idea/ *.swp *.swo
+
+# Config & Secrets
+.env .env.* *.log *.tmp
+
+# High-token bloat (safe to ignore during dev)
+tests/ docs/ migrations/ fixtures/ uploads/ static/ node_modules/

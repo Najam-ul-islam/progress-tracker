@@ -1,0 +1,452 @@
+openapi: 3.1.0
+info:
+  title: Progress Tracker — Projects Management
+  version: "0.5.0"
+  description: |
+    HTTP contract for feature 005-projects. Endpoints are mounted under the
+    `/projects` prefix by `app.main.register_modules`, except module-by-id
+    endpoints which mount at `/modules/{module_id}` for ergonomic URLs. All
+    endpoints require a valid bearer token; unauthenticated requests return
+    401 (`auth.dependencies.get_current_user`). RBAC, share-cap, activation
+    gate, and auto-completion semantics are detailed in `spec.md`.
+
+servers:
+  - url: http://localhost:8000
+    description: Local dev (uv run uvicorn app.main:app --reload)
+
+tags:
+  - name: projects
+    description: Project lifecycle, listing, and aggregate progress.
+  - name: modules
+    description: Per-project module CRUD and developer progress updates.
+
+security:
+  - bearerAuth: []
+
+paths:
+  /projects:
+    post:
+      tags: [projects]
+      summary: Create a project.
+      description: |
+        Admins and managers may call this endpoint. Developers receive 403.
+        `client_id` must reference an active client (FR-005). `company_share`
+        and `developer_share` are server-set (30 / 70) and rejected if
+        supplied (FR-018). Returned `status` is always `pending`.
+      operationId: create_project
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/ProjectCreate" }
+      responses:
+        "201":
+          description: Created project.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ProjectRead" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "422": { $ref: "#/components/responses/UnprocessableEntity" }
+
+    get:
+      tags: [projects]
+      summary: List active projects.
+      description: |
+        Admins and managers see every active project. Developers see only
+        projects in which they have at least one assigned active module
+        (FR-008). MVP returns an unwrapped JSON array; pagination deferred.
+      operationId: list_projects
+      responses:
+        "200":
+          description: Active projects visible to the caller.
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: "#/components/schemas/ProjectRead" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+
+  /projects/{project_id}:
+    parameters:
+      - $ref: "#/components/parameters/ProjectId"
+    get:
+      tags: [projects]
+      summary: Read one project.
+      description: |
+        Admins and managers may read any active project. Developers may read
+        only projects they are assigned to via at least one active module
+        (FR-008); a project they are not assigned to returns 404, never 403,
+        to avoid leaking existence.
+      operationId: get_project
+      responses:
+        "200":
+          description: The project.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ProjectRead" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404": { $ref: "#/components/responses/NotFound" }
+
+    patch:
+      tags: [projects]
+      summary: Update a project; optionally activate.
+      description: |
+        Admins and managers may update. Developers receive 403. Empty or
+        all-null bodies return 422 (FR-012). Server-set fields (`id`,
+        `client_id`, `company_share`, `developer_share`, `created_at`,
+        `updated_at`, `is_active`) are rejected by the closed schema (FR-018).
+
+        Setting `status: "active"` runs the activation gate: the sum of
+        `share_percentage` over active modules must equal exactly 70.00
+        (FR-013). `status: "completed"` and `status: "pending"` are NEVER
+        accepted from clients (FR-014, FR-015).
+      operationId: update_project
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/ProjectUpdate" }
+      responses:
+        "200":
+          description: Updated project.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ProjectRead" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "422": { $ref: "#/components/responses/UnprocessableEntity" }
+
+    delete:
+      tags: [projects]
+      summary: Soft-delete a project.
+      description: |
+        Admin only. Sets `is_active = false` and bumps `updated_at`. Returns
+        204 with no body. Subsequent reads return 404 (FR-026). Modules are
+        not cascade-deleted in storage, but become unreachable through the
+        public API once the parent is gone.
+      operationId: delete_project
+      responses:
+        "204":
+          description: Deleted (no body).
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+
+  /projects/{project_id}/progress:
+    parameters:
+      - $ref: "#/components/parameters/ProjectId"
+    get:
+      tags: [projects]
+      summary: Aggregate project progress.
+      description: |
+        Returns the simple arithmetic mean of `progress` over every active
+        module of the project (FR-022); `0.0` when there are none. Visibility
+        rules from FR-008 apply: developers not assigned to the project see
+        404.
+      operationId: get_project_progress
+      responses:
+        "200":
+          description: Aggregate progress.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ProjectProgressResponse" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404": { $ref: "#/components/responses/NotFound" }
+
+  /projects/{project_id}/modules:
+    parameters:
+      - $ref: "#/components/parameters/ProjectId"
+    post:
+      tags: [modules]
+      summary: Add a module to a project.
+      description: |
+        Admin or manager. `assigned_developer_id` must reference an active
+        user with `role = "developer"` (FR-009). Adding the requested
+        `share_percentage` must keep the sum of active modules' shares
+        ≤ 70.00 (FR-010). Module is created at `progress=0`, `status="pending"`.
+      operationId: create_module
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/ModuleCreate" }
+      responses:
+        "201":
+          description: Created module.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ModuleRead" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "422": { $ref: "#/components/responses/UnprocessableEntity" }
+
+  /modules/{module_id}:
+    parameters:
+      - $ref: "#/components/parameters/ModuleId"
+    patch:
+      tags: [modules]
+      summary: Update a module (rename, reassign, change share).
+      description: |
+        Admin or manager. Empty or all-null bodies return 422 (FR-012). The
+        module's own current share is excluded from the cap check on a share
+        update (FR-011) so a no-op share patch never collides with itself.
+        Developers cannot reach this endpoint (use
+        `PATCH /modules/{id}/progress`); they receive 403.
+      operationId: update_module
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/ModuleUpdate" }
+      responses:
+        "200":
+          description: Updated module.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ModuleRead" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "422": { $ref: "#/components/responses/UnprocessableEntity" }
+
+    delete:
+      tags: [modules]
+      summary: Soft-delete a module.
+      description: |
+        Admin only. Sets `is_active = false`, freeing the module's
+        `share_percentage` for re-use within the same project (FR-023).
+        Triggers the auto-completion check on the parent project (FR-014):
+        if the remaining active modules now all read 100, the project flips
+        to `completed`.
+      operationId: delete_module
+      responses:
+        "204":
+          description: Deleted (no body).
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+
+  /modules/{module_id}/progress:
+    parameters:
+      - $ref: "#/components/parameters/ModuleId"
+    patch:
+      tags: [modules]
+      summary: Update progress on a module.
+      description: |
+        Admin, manager, or the developer currently assigned to the module
+        (FR-019). Body is `{progress: int 0..100}` only — closed schema. The
+        module's `status` is derived from `progress` (FR-020). The parent
+        project must be in `status="active"` (FR-021); attempts on
+        `pending` or `completed` projects return 422. Reaching 100 on every
+        active module triggers auto-completion of the parent (FR-014).
+      operationId: update_module_progress
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/ModuleProgressUpdate" }
+      responses:
+        "200":
+          description: Updated module.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ModuleRead" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "422": { $ref: "#/components/responses/UnprocessableEntity" }
+
+components:
+  parameters:
+    ProjectId:
+      name: project_id
+      in: path
+      required: true
+      schema: { type: integer, minimum: 1 }
+    ModuleId:
+      name: module_id
+      in: path
+      required: true
+      schema: { type: integer, minimum: 1 }
+
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+
+  responses:
+    Unauthorized:
+      description: Missing or invalid bearer token.
+      content:
+        application/json:
+          schema: { $ref: "#/components/schemas/Detail" }
+    Forbidden:
+      description: Caller's role does not permit this action.
+      content:
+        application/json:
+          schema: { $ref: "#/components/schemas/Detail" }
+    NotFound:
+      description: Project or module does not exist (or is soft-deleted, FR-026).
+      content:
+        application/json:
+          schema: { $ref: "#/components/schemas/Detail" }
+    UnprocessableEntity:
+      description: |
+        Validation failure. Examples include: closed-schema rejection
+        (FR-018), `client_id` does not reference an active client (FR-005),
+        `assigned_developer_id` not a developer (FR-009), share-cap exceeded
+        (FR-010), activation-gate failure (FR-013), backwards status
+        transition (FR-015), module mutation on completed project (FR-016),
+        progress update on non-active project (FR-021), no-op patch (FR-012),
+        date range invalid (FR-006).
+      content:
+        application/json:
+          schema: { $ref: "#/components/schemas/Detail" }
+
+  schemas:
+    Detail:
+      type: object
+      properties:
+        detail: { type: string }
+      required: [detail]
+
+    ProjectStatus:
+      type: string
+      enum: [pending, active, completed]
+
+    ModuleStatus:
+      type: string
+      enum: [pending, in_progress, completed]
+
+    ProjectCreate:
+      type: object
+      additionalProperties: false
+      required: [name, client_id, total_amount, start_date, end_date]
+      properties:
+        name: { type: string, minLength: 1, maxLength: 200 }
+        description: { type: [string, "null"] }
+        client_id: { type: integer, minimum: 1 }
+        total_amount:
+          type: string
+          description: Decimal serialised as string with up to 2 fractional digits, > 0.
+          example: "10000.00"
+        start_date: { type: string, format: date }
+        end_date: { type: string, format: date }
+
+    ProjectUpdate:
+      type: object
+      additionalProperties: false
+      properties:
+        name: { type: [string, "null"], minLength: 1, maxLength: 200 }
+        description: { type: [string, "null"] }
+        total_amount: { type: [string, "null"], example: "12500.00" }
+        start_date: { type: [string, "null"], format: date }
+        end_date: { type: [string, "null"], format: date }
+        status:
+          type: [string, "null"]
+          enum: [active, null]
+          description: |
+            Only `active` may be sent (manual `pending → active` transition).
+            `completed` is never accepted (FR-014). `pending` is never
+            accepted (FR-015).
+      description: |
+        At least one field must be non-null (FR-012). Closed schema; any
+        unknown field returns 422.
+
+    ProjectRead:
+      type: object
+      additionalProperties: false
+      required:
+        [id, name, client_id, total_amount, company_share, developer_share, start_date, end_date, status, is_active, created_at, updated_at]
+      properties:
+        id: { type: integer }
+        name: { type: string }
+        description: { type: [string, "null"] }
+        client_id: { type: integer }
+        total_amount: { type: string, example: "10000.00" }
+        company_share: { type: string, example: "30.00" }
+        developer_share: { type: string, example: "70.00" }
+        start_date: { type: string, format: date }
+        end_date: { type: string, format: date }
+        status: { $ref: "#/components/schemas/ProjectStatus" }
+        is_active: { type: boolean }
+        created_at: { type: string, format: date-time }
+        updated_at: { type: string, format: date-time }
+
+    ModuleCreate:
+      type: object
+      additionalProperties: false
+      required: [name, assigned_developer_id, share_percentage]
+      properties:
+        name: { type: string, minLength: 1, maxLength: 200 }
+        description: { type: [string, "null"] }
+        assigned_developer_id: { type: integer, minimum: 1 }
+        share_percentage:
+          type: string
+          description: Decimal 0.01..70.00 with up to 2 fractional digits.
+          example: "30.00"
+
+    ModuleUpdate:
+      type: object
+      additionalProperties: false
+      properties:
+        name: { type: [string, "null"], minLength: 1, maxLength: 200 }
+        description: { type: [string, "null"] }
+        assigned_developer_id: { type: [integer, "null"], minimum: 1 }
+        share_percentage: { type: [string, "null"], example: "25.00" }
+      description: At least one field non-null (FR-012). Closed schema.
+
+    ModuleProgressUpdate:
+      type: object
+      additionalProperties: false
+      required: [progress]
+      properties:
+        progress: { type: integer, minimum: 0, maximum: 100 }
+
+    ModuleRead:
+      type: object
+      additionalProperties: false
+      required:
+        [id, project_id, name, assigned_developer_id, progress, status, share_percentage, is_active, created_at, updated_at]
+      properties:
+        id: { type: integer }
+        project_id: { type: integer }
+        name: { type: string }
+        description: { type: [string, "null"] }
+        assigned_developer_id: { type: integer }
+        progress: { type: integer, minimum: 0, maximum: 100 }
+        status: { $ref: "#/components/schemas/ModuleStatus" }
+        share_percentage: { type: string, example: "30.00" }
+        is_active: { type: boolean }
+        created_at: { type: string, format: date-time }
+        updated_at: { type: string, format: date-time }
+
+    ModuleProgressSummary:
+      type: object
+      additionalProperties: false
+      required: [id, name, progress, share_percentage]
+      properties:
+        id: { type: integer }
+        name: { type: string }
+        progress: { type: integer, minimum: 0, maximum: 100 }
+        share_percentage: { type: string, example: "30.00" }
+
+    ProjectProgressResponse:
+      type: object
+      additionalProperties: false
+      required: [project_id, progress, modules]
+      properties:
+        project_id: { type: integer }
+        progress:
+          type: number
+          format: float
+          minimum: 0
+          maximum: 100
+          description: Simple arithmetic mean of active modules' progress (FR-022).
+        modules:
+          type: array
+          items: { $ref: "#/components/schemas/ModuleProgressSummary" }

@@ -1,0 +1,283 @@
+openapi: 3.1.0
+info:
+  title: Progress Tracker — Clients Management
+  version: "0.4.0"
+  description: |
+    HTTP contract for feature 004-clients-management. All endpoints are
+    mounted under the `/clients` prefix by `app.main.register_modules`. All
+    endpoints require a valid bearer token; unauthenticated requests return
+    401 with the body emitted by `auth.dependencies.get_current_user`.
+
+servers:
+  - url: http://localhost:8000
+    description: Local dev (uv run uvicorn app.main:app --reload)
+
+tags:
+  - name: clients
+    description: Client (customer) record management.
+
+security:
+  - bearerAuth: []
+
+paths:
+  /clients:
+    post:
+      tags: [clients]
+      summary: Create a client.
+      description: |
+        Admins and managers may call this endpoint. Developers receive 403.
+        `name`, `email`, `phone` are required; `company_name`, `address`,
+        `notes` are optional. Duplicate `email` or `phone` against an active
+        row returns 409 (FR-009).
+      operationId: create_client
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/ClientCreate" }
+      responses:
+        "201":
+          description: Created client.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ClientRead" }
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "409":
+          $ref: "#/components/responses/DuplicateClient"
+        "422":
+          $ref: "#/components/responses/UnprocessableEntity"
+
+    get:
+      tags: [clients]
+      summary: List active clients.
+      description: |
+        Admins and managers only. Developers receive 403. MVP returns the
+        full list (active rows only) as an unwrapped JSON array; pagination
+        is deferred. Soft-deleted rows are excluded (FR-014).
+      operationId: list_clients
+      responses:
+        "200":
+          description: List of active clients.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ClientListResponse" }
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+
+  /clients/{id}:
+    get:
+      tags: [clients]
+      summary: Read a client by id.
+      description: |
+        Admins and managers only. Soft-deleted clients are reported as 404
+        (FR-014, FR-019) — the response body does not distinguish "never
+        existed" from "soft-deleted".
+      operationId: get_client_by_id
+      parameters:
+        - $ref: "#/components/parameters/ClientId"
+      responses:
+        "200":
+          description: Client record.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ClientRead" }
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+
+    patch:
+      tags: [clients]
+      summary: Update a client.
+      description: |
+        Admins and managers only. Developers receive 403. Accepts any
+        non-empty subset of `{name, email, phone, company_name, address,
+        notes}`. An empty body or a body whose every field is `null` returns
+        422 (FR-011). `email` and `phone` are re-validated and re-checked
+        for uniqueness against every other active client (FR-010).
+      operationId: update_client
+      parameters:
+        - $ref: "#/components/parameters/ClientId"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/ClientUpdate" }
+      responses:
+        "200":
+          description: Updated client record.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ClientRead" }
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "409":
+          $ref: "#/components/responses/DuplicateClient"
+        "422":
+          $ref: "#/components/responses/UnprocessableEntity"
+
+    delete:
+      tags: [clients]
+      summary: Soft-delete a client.
+      description: |
+        Admin only. Sets `is_active = false` and bumps `updated_at`. The row
+        remains in the database to preserve future foreign keys from the
+        projects module, but disappears from every public read endpoint
+        (FR-014). Idempotent in effect: deleting an already-soft-deleted id
+        returns 404 because the row is invisible to the API.
+      operationId: delete_client
+      parameters:
+        - $ref: "#/components/parameters/ClientId"
+      responses:
+        "204":
+          description: Client soft-deleted.
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+
+components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+      description: HS256 JWT minted by POST /auth/login (feature 002).
+
+  parameters:
+    ClientId:
+      name: id
+      in: path
+      required: true
+      description: Surrogate primary key of the client.
+      schema:
+        type: integer
+        format: int64
+        minimum: 1
+
+  responses:
+    Unauthorized:
+      description: |
+        Missing, invalid, expired, or wrong-secret bearer token. Body format
+        is identical to feature 002's `get_current_user` 401 body.
+      content:
+        application/json:
+          schema: { $ref: "#/components/schemas/AuthError" }
+          example: { detail: "Could not validate credentials" }
+
+    Forbidden:
+      description: |
+        Caller is authenticated but their role is not allowed (developers
+        cannot access any clients endpoint; managers cannot DELETE).
+      content:
+        application/json:
+          schema: { $ref: "#/components/schemas/AuthError" }
+          example: { detail: "Forbidden" }
+
+    NotFound:
+      description: |
+        Client id does not exist or is soft-deleted (FR-019). The body does
+        not distinguish the two cases.
+      content:
+        application/json:
+          schema: { $ref: "#/components/schemas/AuthError" }
+          example: { detail: "Client not found" }
+
+    DuplicateClient:
+      description: |
+        A duplicate `email` or `phone` was detected against another active
+        client (FR-009 / FR-010). The row is unchanged.
+      content:
+        application/json:
+          schema: { $ref: "#/components/schemas/AuthError" }
+          examples:
+            duplicate-email:
+              value: { detail: "client with this email already exists" }
+            duplicate-phone:
+              value: { detail: "client with this phone already exists" }
+
+    UnprocessableEntity:
+      description: |
+        Pydantic validation failed: missing required field, malformed email,
+        invalid phone format, empty PATCH (FR-011), or unknown field
+        (FR-015 / `extra="forbid"`).
+      content:
+        application/json:
+          schema:
+            type: object
+            properties:
+              detail:
+                type: array
+                items:
+                  type: object
+
+  schemas:
+    ClientCreate:
+      type: object
+      additionalProperties: false
+      required: [name, email, phone]
+      properties:
+        name:         { type: string, minLength: 1, maxLength: 120 }
+        email:        { type: string, format: email, maxLength: 320 }
+        phone:        { type: string, minLength: 8, maxLength: 40, pattern: "^\\+\\d{1,3}[\\d\\s\\-\\(\\)]{6,18}\\d$" }
+        company_name: { type: string, maxLength: 200, nullable: true }
+        address:      { type: string, maxLength: 500, nullable: true }
+        notes:        { type: string, nullable: true }
+
+    ClientUpdate:
+      type: object
+      additionalProperties: false
+      description: |
+        At least one of name/email/phone/company_name/address/notes MUST be
+        provided. An empty body or a body whose every field is null returns
+        422 (FR-011).
+      properties:
+        name:         { type: string, minLength: 1, maxLength: 120, nullable: true }
+        email:        { type: string, format: email, maxLength: 320, nullable: true }
+        phone:        { type: string, minLength: 8, maxLength: 40, pattern: "^\\+\\d{1,3}[\\d\\s\\-\\(\\)]{6,18}\\d$", nullable: true }
+        company_name: { type: string, maxLength: 200, nullable: true }
+        address:      { type: string, maxLength: 500, nullable: true }
+        notes:        { type: string, nullable: true }
+
+    ClientRead:
+      type: object
+      additionalProperties: false
+      required: [id, name, email, phone, company_name, address, notes, is_active, created_at, updated_at]
+      properties:
+        id:           { type: integer, format: int64, minimum: 1 }
+        name:         { type: string, minLength: 1, maxLength: 120 }
+        email:        { type: string, format: email, maxLength: 320 }
+        phone:        { type: string, minLength: 8, maxLength: 40 }
+        company_name: { type: [string, "null"], maxLength: 200 }
+        address:      { type: [string, "null"], maxLength: 500 }
+        notes:        { type: [string, "null"] }
+        is_active:    { type: boolean }
+        created_at:   { type: string, format: date-time }
+        updated_at:   { type: string, format: date-time }
+
+    ClientListResponse:
+      type: array
+      items: { $ref: "#/components/schemas/ClientRead" }
+
+    AuthError:
+      type: object
+      additionalProperties: false
+      required: [detail]
+      properties:
+        detail:
+          oneOf:
+            - { type: string }
+            - { type: array, items: { type: object } }

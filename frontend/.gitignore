@@ -12,6 +12,16 @@ dist
 dist-ssr
 *.local
 
+# Local env files (keep .env.example tracked)
+.env
+.env.local
+.env.development.local
+.env.test.local
+.env.production.local
+
+# Test artifacts
+coverage
+
 # Editor directories and files
 .vscode/*
 !.vscode/extensions.json

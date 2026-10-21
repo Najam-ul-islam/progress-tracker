@@ -1,0 +1,214 @@
+openapi: 3.1.0
+info:
+  title: Progress Tracker — Authentication API
+  version: 0.1.0
+  description: |
+    Authentication endpoints for the progress-tracker SaaS.
+    Mounted at prefix `/auth` from `app.main`.
+    Depends on the `users` module's `User` SQLModel.
+servers:
+  - url: http://localhost:8000
+    description: Local dev (uv run uvicorn app.main:app --reload)
+paths:
+  /auth/register:
+    post:
+      operationId: registerUser
+      tags: [auth]
+      summary: Register a new user account
+      description: |
+        Creates a new user. Email is normalised to lowercase. Password is hashed with bcrypt
+        before persistence. Returns the sanitised user record (never the password hash).
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/UserCreate'
+      responses:
+        '201':
+          description: User created.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/UserRead'
+        '409':
+          description: Email already registered (FR-003).
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AuthError'
+        '422':
+          description: Validation error — bad email, bad role, missing fields (FR-005).
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+
+  /auth/login:
+    post:
+      operationId: loginUser
+      tags: [auth]
+      summary: Exchange credentials for a JWT access token
+      description: |
+        Verifies the supplied credentials. On success, returns a signed JWT.
+        On failure (unknown email OR wrong password), returns a single generic 401
+        — responses MUST be byte-identical so callers cannot enumerate accounts (FR-007, SC-005).
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/UserLogin'
+      responses:
+        '200':
+          description: Authentication succeeded.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/TokenResponse'
+        '401':
+          description: Authentication failed (generic).
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AuthError'
+        '422':
+          description: Validation error — bad email format, missing fields.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+
+  /auth/me:
+    get:
+      operationId: readCurrentUser
+      tags: [auth]
+      summary: Return the current authenticated user's record
+      description: |
+        Decodes the bearer token, looks up the user, and returns it.
+        Returns HTTP 401 for any token that is missing, malformed, expired,
+        signed with the wrong key, or whose `sub` no longer exists (FR-021).
+      security:
+        - bearerAuth: []
+      responses:
+        '200':
+          description: Current user.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/UserRead'
+        '401':
+          description: Authentication failed (generic).
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AuthError'
+
+components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+
+  schemas:
+    UserCreate:
+      type: object
+      required: [name, email, password, role]
+      additionalProperties: false
+      properties:
+        name:
+          type: string
+          minLength: 1
+          maxLength: 120
+        email:
+          type: string
+          format: email
+        password:
+          type: string
+          minLength: 8
+          maxLength: 128
+          writeOnly: true
+        role:
+          type: string
+          enum: [admin, manager, developer]
+
+    UserLogin:
+      type: object
+      required: [email, password]
+      additionalProperties: false
+      properties:
+        email:
+          type: string
+          format: email
+        password:
+          type: string
+          minLength: 1
+          maxLength: 128
+          writeOnly: true
+
+    UserRead:
+      type: object
+      required: [id, name, email, role]
+      additionalProperties: false
+      properties:
+        id:
+          type: integer
+          minimum: 1
+        name:
+          type: string
+        email:
+          type: string
+          format: email
+        role:
+          type: string
+          enum: [admin, manager, developer]
+        created_at:
+          type: string
+          format: date-time
+          description: Present on register response; optional on /auth/me.
+
+    TokenResponse:
+      type: object
+      required: [access_token, token_type, user]
+      additionalProperties: false
+      properties:
+        access_token:
+          type: string
+          description: HS256-signed JWT. Claims are sub, email, role, iat, exp.
+        token_type:
+          type: string
+          enum: [bearer]
+        user:
+          $ref: '#/components/schemas/UserRead'
+
+    AuthError:
+      type: object
+      required: [detail]
+      additionalProperties: false
+      properties:
+        detail:
+          type: string
+          enum:
+            - Could not validate credentials
+            - Email already registered
+            - Forbidden
+
+    HTTPValidationError:
+      type: object
+      properties:
+        detail:
+          type: array
+          items:
+            type: object
+            properties:
+              loc:
+                type: array
+                items:
+                  oneOf:
+                    - type: string
+                    - type: integer
+              msg:
+                type: string
+              type:
+                type: string
